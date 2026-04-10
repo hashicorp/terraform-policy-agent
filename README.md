@@ -31,7 +31,7 @@ docker logout icr.io
 Clone this repository to obtain the required files:
 
 ```bash
-git clone https://github.com/your-org/tfpolicy-agent.git
+git clone git@github.ibm.com:project-polaris/tfpolicy-agent.git
 cd tfpolicy-agent
 ```
 
