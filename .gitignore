@@ -24,3 +24,5 @@ LICENSE.txt
 data/
 input/
 step
+.roo/
+.vscode/
