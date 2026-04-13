@@ -70,7 +70,7 @@ MAX_WORKERS=5
 
 ### 4. Create policy_goal.txt
 
-Create a `policy_goal.txt` file to specify which policies to generate:
+Create a `policy_goal.txt` file in this directory to specify which policies to generate:
 
 **Sentinel policy conversion:**
 ````
@@ -172,5 +172,5 @@ Each policy directory contains:
 - `requirement.txt` - Policy requirements
 - `policy.policy.hcl` - Generated TF Policy
 - `main.tf` - Test configuration
-- `policytest.hcl` - Test cases
+- `test.policytest.hcl` - Test cases
 - `report.md` - Validation results and test outcomes
