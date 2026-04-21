@@ -166,8 +166,7 @@ DOCKER_CMD="docker run --rm -it \
     -e AWS_SECRET_ACCESS_KEY=\"${AWS_SECRET_ACCESS_KEY:-}\" \
     -e AWS_SESSION_TOKEN=\"${AWS_SESSION_TOKEN:-}\" \
     icr.io/polaris-20251120/roo-headless:latest \
-    bash -c \"ln -sf /steps /root/workspace/steps 2>/dev/null || true && \
-        mkdir -p /root/workspace/.roo && \
+    bash -c \"mkdir -p /root/workspace/.roo && \
         ln -sf /tmp/mcp.json /root/workspace/.roo/mcp.json && \
         python /usr/local/bin/run_pipeline.py \
         --policy \\\"$POLICY\\\" \
