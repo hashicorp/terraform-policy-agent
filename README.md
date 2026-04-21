@@ -59,6 +59,16 @@ OUTPUT_DIR=./output_20260409_run1
 MAX_WORKERS=5
 ```
 
+**Example `.env` for openai-compatible model:**
+```bash
+API_PROVIDER=openai-compatible
+MODEL_BASE_URL=https://your-endpoint.com
+MODEL_NAME=aws/claude-sonnet-4-5 # change model
+MODEL_API_KEY=your-api-key
+OUTPUT_DIR=./output_20260409_run1
+MAX_WORKERS=5
+```
+
 **Required variables:**
 - `MODEL_API_KEY` - Your API key (Bearer token for Bedrock, or API key for LiteLLM)
 - `OUTPUT_DIR` - Output directory for generated policies (must be unique for each run)
