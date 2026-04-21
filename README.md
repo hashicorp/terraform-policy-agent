@@ -144,9 +144,9 @@ All S3-related policies from SecurityHub
 
 ## Run
 
-### Start and Execute
+### Option 1: Standard Run (Manual Input)
 
-The `image_run.sh` script will:
+The [`image_run.sh`](image_run.sh) script will:
 1. Check if required images are available locally
 2. Start MCP servers
 3. Execute the policy generation pipeline
@@ -156,6 +156,28 @@ The `image_run.sh` script will:
 ```
 
 **Important:** Make sure you have pulled the Docker images before running this script (see Setup step 1).
+
+### Option 2: External Repository Integration (Automated)
+
+The [`run_with_external_repo.sh`](run_with_external_repo.sh) script automates the entire workflow for converting Sentinel policies from an external repository:
+
+**Features:**
+- Automatically extracts unconverted Sentinel files from external repository
+- Preserves directory structure
+- Skips already converted policies (checks for existing `.policy.hcl` files)
+- Deploys generated policies back to `tfpolicy/` subdirectories in the external repo
+
+**Setup:**
+
+Add the external repository path to your [`.env`](.env) file:
+```bash
+EXTERNAL_REPO_DIR=/path/to/target-dir
+```
+
+**Execution:**
+```bash
+./run_with_external_repo.sh
+```
 
 ### Stop Services
 ```bash
