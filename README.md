@@ -78,7 +78,7 @@ MAX_WORKERS=5
 - `AWS_REGION` - AWS region (default: `us-east-1`, not used for LiteLLM)
 - `MAX_WORKERS` - Number of parallel workers (default: `5`)
 
-### 4. Create policy_goal.txt
+### 4. Create policy_goal.txt (skip this when you use External Repository Integration Run)
 
 Create a `policy_goal.txt` file in this directory to specify which policies to generate:
 
