@@ -17,7 +17,7 @@ docker login icr.io -u iamapikey
 # Login with the API Key
 
 # Pull required images
-docker pull icr.io/polaris-20251120/roo-headless:latest
+docker pull icr.io/polaris-20251120/opencode-agent:latest
 docker pull icr.io/polaris-20251120/mcp-server:latest
 
 # Logout from registry
@@ -151,11 +151,36 @@ The [`image_run.sh`](image_run.sh) script will:
 2. Start MCP servers
 3. Execute the policy generation pipeline
 
+**Run all stages:**
 ```bash
 ./image_run.sh
 ```
 
-**Important:** Make sure you have pulled the Docker images before running this script (see Setup step 1).
+**Run specific stage only:**
+```bash
+# Stage 0: Policy Extraction
+./image_run.sh --step 0
+
+# Stage 1: Requirement Generation
+./image_run.sh --step 1
+
+# Stage 2: Policy Generation
+./image_run.sh --step 2
+
+# Stage 3: Summary Generation
+./image_run.sh --step 3
+```
+
+**Pipeline Stages:**
+- **Stage 0**: Extract and split policies into individual goal files
+- **Stage 1**: Generate requirements for each policy (parallel execution)
+- **Stage 2**: Generate policies and test cases (parallel execution)
+- **Stage 3**: Generate summary report
+
+**Important:**
+- Make sure you have pulled the Docker images before running this script (see Setup step 1)
+- When running individual stages, ensure previous stages have completed successfully
+- The pipeline displays real-time progress including stage information and parallel execution status
 
 ### Option 2: External Repository Integration (Automated)
 
@@ -174,10 +199,27 @@ Add the external repository path to your [`.env`](.env) file:
 EXTERNAL_REPO_DIR=/path/to/target-dir
 ```
 
-**Execution:**
+**Run all stages:**
 ```bash
 ./run_with_external_repo.sh
 ```
+
+**Run specific pipeline stage only (Phase 2):**
+```bash
+# Stage 0: Policy Extraction
+./run_with_external_repo.sh --step 0
+
+# Stage 1: Requirement Generation
+./run_with_external_repo.sh --step 1
+
+# Stage 2: Policy Generation
+./run_with_external_repo.sh --step 2
+
+# Stage 3: Summary Generation
+./run_with_external_repo.sh --step 3
+```
+
+**Note:** The `--step` option only affects Phase 2 (pipeline execution). Phase 1 (Sentinel extraction) and Phase 3 (deployment) always run when using this script.
 
 ### Stop Services
 ```bash

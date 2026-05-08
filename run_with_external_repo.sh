@@ -1,6 +1,32 @@
 #!/bin/bash
 set -e
 
+# Parse command line arguments
+STEP=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --step)
+            STEP="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--step <0|1|2|3>]"
+            echo ""
+            echo "Options:"
+            echo "  --step <0|1|2|3>  Run only a specific pipeline step in Phase 2"
+            echo "                    0: Policy Extraction"
+            echo "                    1: Requirement Generation"
+            echo "                    2: Policy Generation"
+            echo "                    3: Summary Generation"
+            echo "                    (If not specified, runs all steps)"
+            echo ""
+            echo "Note: Phase 1 (Sentinel extraction) and Phase 3 (deployment) always run"
+            exit 1
+            ;;
+    esac
+done
+
 echo "=========================================="
 echo "External Repo Integration Pipeline"
 echo "=========================================="
@@ -14,10 +40,10 @@ fi
 
 # Check if required images exist
 echo "Checking for required Docker images..."
-if ! docker image inspect icr.io/polaris-20251120/roo-headless:latest &> /dev/null; then
-    echo "Error: icr.io/polaris-20251120/roo-headless:latest image not found."
+if ! docker image inspect icr.io/polaris-20251120/opencode-agent:latest &> /dev/null; then
+    echo "Error: icr.io/polaris-20251120/opencode-agent:latest image not found."
     echo "Please pull the image first using:"
-    echo "  docker pull icr.io/polaris-20251120/roo-headless:latest"
+    echo "  docker pull icr.io/polaris-20251120/opencode-agent:latest"
     exit 1
 fi
 
@@ -29,13 +55,6 @@ if ! docker image inspect icr.io/polaris-20251120/mcp-server:latest &> /dev/null
 fi
 
 echo "✓ Docker images found"
-echo ""
-
-# Create local tags for the images (required by run_pipeline.py)
-echo "Creating local image tags..."
-docker tag icr.io/polaris-20251120/roo-headless:latest roo-headless:latest
-docker tag icr.io/polaris-20251120/mcp-server:latest mcp-server:latest
-echo "✓ Local image tags created"
 echo ""
 
 # Load environment variables from .env file
@@ -160,6 +179,25 @@ echo "  Skipped $SKIPPED_COUNT files (already have policy.hcl)"
 echo "  Skipped $MOCK_COUNT mock files (in test/ directories)"
 echo ""
 
+# Copy and process sentinel.hcl if SENTINEL_HCL_PATH is defined
+if [ -n "$SENTINEL_HCL_PATH" ]; then
+    if [ -f "$SENTINEL_HCL_PATH" ]; then
+        echo "Processing sentinel.hcl file..."
+        
+        # Copy sentinel.hcl to INPUT_DIR
+        cp "$SENTINEL_HCL_PATH" "$INPUT_DIR/sentinel.hcl"
+        
+        # Process the file to replace full paths with just filenames
+        # Example: source = "./policies/s3/s3-bucket-logging.sentinel" -> source = "s3-bucket-logging.sentinel"
+        sed -i.bak 's|source = "[^"]*\/\([^/"]*\.sentinel\)"|source = "\1"|g' "$INPUT_DIR/sentinel.hcl"
+        rm -f "$INPUT_DIR/sentinel.hcl.bak"
+        
+        echo "✓ Copied and processed sentinel.hcl to $INPUT_DIR/"
+    else
+        echo "⚠️  Warning: SENTINEL_HCL_PATH is set but file not found: $SENTINEL_HCL_PATH"
+    fi
+fi
+
 # Generate policy_goal.txt
 echo "Generating policy_goal.txt..."
 echo "Generate TF Policy for" > policy_goal.txt
@@ -168,6 +206,13 @@ echo "Generate TF Policy for" > policy_goal.txt
 while IFS= read -r -d '' sentinel_file; do
     echo "./$sentinel_file" >> policy_goal.txt
 done < <(find "$INPUT_DIR" -type f -name "*.sentinel" -print0)
+
+# If sentinel.hcl was copied, add reference to it in policy_goal.txt
+if [ -n "$SENTINEL_HCL_PATH" ] && [ -f "$INPUT_DIR/sentinel.hcl" ]; then
+    echo "" >> policy_goal.txt
+    echo "Enforcement level configuration file:" >> policy_goal.txt
+    echo "./$INPUT_DIR/sentinel.hcl" >> policy_goal.txt
+fi
 
 echo "✓ Generated policy_goal.txt"
 echo ""
@@ -211,7 +256,7 @@ echo "Waiting for MCP servers to be ready..."
 sleep 5
 
 echo ""
-echo "Running pipeline..."
+echo "Running pipeline with OpenCode..."
 echo "  Policy file: policy_goal.txt"
 echo "  Output: $OUTPUT_DIR"
 echo "  Workers: $MAX_WORKERS"
@@ -222,41 +267,47 @@ echo "  AWS Region: $AWS_REGION"
 echo "  AWS Cross-Region: $AWS_USE_CROSS_REGION"
 echo ""
 
-# Build docker run command
-DOCKER_CMD="docker run --rm -it \
-    --name roo-pipeline \
-    --network mcp-network \
-    -v \"$(pwd):/root/workspace\" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -e DEBUG=1 \
-    -e HOST_WORKSPACE_PATH=\"$(pwd)\" \
-    -e MODEL_API_KEY=\"$MODEL_API_KEY\" \
-    -e MODEL_BASE_URL=\"$MODEL_BASE_URL\" \
-    -e MODEL_NAME=\"$MODEL_NAME\" \
-    -e API_PROVIDER=\"$API_PROVIDER\" \
-    -e AWS_REGION=\"$AWS_REGION\" \
-    -e AWS_ACCESS_KEY_ID=\"${AWS_ACCESS_KEY_ID:-}\" \
-    -e AWS_SECRET_ACCESS_KEY=\"${AWS_SECRET_ACCESS_KEY:-}\" \
-    -e AWS_SESSION_TOKEN=\"${AWS_SESSION_TOKEN:-}\" \
-    icr.io/polaris-20251120/roo-headless:latest \
-    bash -c \"mkdir -p /root/workspace/.roo && \
-        ln -sf /tmp/mcp.json /root/workspace/.roo/mcp.json && \
-        python /usr/local/bin/run_pipeline.py \
-        --policy \\\"policy_goal.txt\\\" \
-        --output-dir \\\"$OUTPUT_DIR\\\" \
-        --api-key \\\"$MODEL_API_KEY\\\" \
-        --max-workers \\\"$MAX_WORKERS\\\" \
-        --model-base-url \\\"$MODEL_BASE_URL\\\" \
-        --model-name \\\"$MODEL_NAME\\\" \
-        --api-provider \\\"$API_PROVIDER\\\" \
-        --aws-region \\\"$AWS_REGION\\\"\""
+# Run the pipeline in Docker container (run_pipeline-opencode.py is inside the image)
+# Build command arguments as array to avoid quoting issues
+# Use -t flag for pseudo-TTY to enable real-time output display
+DOCKER_CMD=(
+    docker run --rm -t
+    --name opencode-pipeline
+    --network mcp-network
+    -v "$(pwd):/root/workspace"
+    -v "/var/run/docker.sock:/var/run/docker.sock"
+    -e "MODEL_BASE_URL=$MODEL_BASE_URL"
+    -e "MODEL_API_KEY=$MODEL_API_KEY"
+    -e "MODEL_NAME=$MODEL_NAME"
+    -e "API_PROVIDER=$API_PROVIDER"
+    -e "AWS_REGION=$AWS_REGION"
+    -e "AWS_USE_CROSS_REGION=$AWS_USE_CROSS_REGION"
+    -e "HOST_WORKSPACE_PATH=$(pwd)"
+    -e "PYTHONUNBUFFERED=1"
+    icr.io/polaris-20251120/opencode-agent:latest
+    python /usr/local/bin/run_pipeline-opencode.py
+    --policy "policy_goal.txt"
+    --output-dir "$OUTPUT_DIR"
+    --api-key "$MODEL_API_KEY"
+    --max-workers "$MAX_WORKERS"
+    --model-base-url "$MODEL_BASE_URL"
+    --model-name "$MODEL_NAME"
+    --api-provider "$API_PROVIDER"
+    --aws-region "$AWS_REGION"
+)
 
 # Add cross-region flag if enabled
 if [ "$AWS_USE_CROSS_REGION" = "true" ]; then
-    DOCKER_CMD="${DOCKER_CMD%\"} --aws-use-cross-region\""
+    DOCKER_CMD+=(--aws-use-cross-region)
 fi
 
-eval $DOCKER_CMD
+# Add --step parameter if specified
+if [ -n "$STEP" ]; then
+    DOCKER_CMD+=(--step "$STEP")
+fi
+
+# Execute the command
+"${DOCKER_CMD[@]}"
 
 echo ""
 echo "=========================================="
