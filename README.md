@@ -69,6 +69,19 @@ OUTPUT_DIR=./output_20260409_run1
 MAX_WORKERS=5
 ```
 
+**Example `.env` for GitHub Copilot (OpenCode mode):**
+```bash
+AUTH_PROVIDER=github-copilot
+MODEL_NAME=claude-sonnet-4.6
+GITHUB_COPILOT_ACCESS_TOKEN=gho_your_access_token
+GITHUB_COPILOT_REFRESH_TOKEN=gho_your_refresh_token
+GITHUB_COPILOT_EXPIRES=0
+OUTPUT_DIR=./output_20260409_run1
+MAX_WORKERS=5
+```
+
+**Note:** Get your GitHub Copilot tokens from `~/.local/share/opencode/auth.json` on your host machine.
+
 **Required variables:**
 - `MODEL_API_KEY` - Your API key (Bearer token for Bedrock, or API key for LiteLLM)
 - `OUTPUT_DIR` - Output directory for generated policies (must be unique for each run)

@@ -70,10 +70,28 @@ else
     exit 1
 fi
 
-# Check required variables
-if [ -z "$MODEL_API_KEY" ]; then
-    echo "Error: MODEL_API_KEY not set in .env file"
-    exit 1
+# Check authentication based on AUTH_PROVIDER
+AUTH_PROVIDER="${AUTH_PROVIDER:-litellm}"
+
+if [ "$AUTH_PROVIDER" = "github-copilot" ]; then
+    # GitHub Copilot authentication
+    if [ -z "$GITHUB_COPILOT_ACCESS_TOKEN" ]; then
+        echo "Error: GITHUB_COPILOT_ACCESS_TOKEN not set in .env file"
+        exit 1
+    fi
+    if [ -z "$GITHUB_COPILOT_REFRESH_TOKEN" ]; then
+        echo "Error: GITHUB_COPILOT_REFRESH_TOKEN not set in .env file"
+        exit 1
+    fi
+    GITHUB_COPILOT_EXPIRES="${GITHUB_COPILOT_EXPIRES:-0}"
+    echo "✓ Using GitHub Copilot authentication"
+else
+    # LiteLLM or Bedrock authentication
+    if [ -z "$MODEL_API_KEY" ]; then
+        echo "Error: MODEL_API_KEY not set in .env file"
+        exit 1
+    fi
+    echo "✓ Using $AUTH_PROVIDER authentication"
 fi
 
 if [ -z "$OUTPUT_DIR" ]; then
@@ -277,24 +295,44 @@ DOCKER_CMD=(
     -v "$(pwd):/root/workspace"
     -v "/var/run/docker.sock:/var/run/docker.sock"
     -e "MODEL_BASE_URL=$MODEL_BASE_URL"
-    -e "MODEL_API_KEY=$MODEL_API_KEY"
     -e "MODEL_NAME=$MODEL_NAME"
     -e "API_PROVIDER=$API_PROVIDER"
     -e "AWS_REGION=$AWS_REGION"
     -e "AWS_USE_CROSS_REGION=$AWS_USE_CROSS_REGION"
+    -e "AUTH_PROVIDER=$AUTH_PROVIDER"
     -e "HOST_WORKSPACE_PATH=$(pwd)"
     -e "PYTHONUNBUFFERED=1"
+)
+
+# Add authentication credentials based on provider
+if [ "$AUTH_PROVIDER" = "github-copilot" ]; then
+    DOCKER_CMD+=(
+        -e "GITHUB_COPILOT_ACCESS_TOKEN=$GITHUB_COPILOT_ACCESS_TOKEN"
+        -e "GITHUB_COPILOT_REFRESH_TOKEN=$GITHUB_COPILOT_REFRESH_TOKEN"
+        -e "GITHUB_COPILOT_EXPIRES=$GITHUB_COPILOT_EXPIRES"
+    )
+else
+    DOCKER_CMD+=(
+        -e "MODEL_API_KEY=$MODEL_API_KEY"
+    )
+fi
+
+DOCKER_CMD+=(
     icr.io/polaris-20251120/opencode-agent:latest
     python /usr/local/bin/run_pipeline-opencode.py
     --policy "policy_goal.txt"
     --output-dir "$OUTPUT_DIR"
-    --api-key "$MODEL_API_KEY"
     --max-workers "$MAX_WORKERS"
     --model-base-url "$MODEL_BASE_URL"
     --model-name "$MODEL_NAME"
     --api-provider "$API_PROVIDER"
     --aws-region "$AWS_REGION"
 )
+
+# Add API key only for non-GitHub Copilot providers
+if [ "$AUTH_PROVIDER" != "github-copilot" ]; then
+    DOCKER_CMD+=(--api-key "$MODEL_API_KEY")
+fi
 
 # Add cross-region flag if enabled
 if [ "$AWS_USE_CROSS_REGION" = "true" ]; then
