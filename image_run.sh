@@ -81,10 +81,29 @@ else
     exit 1
 fi
 
-# Check required variables
-if [ -z "$MODEL_API_KEY" ]; then
-    echo "Error: MODEL_API_KEY not set in .env file"
-    exit 1
+# Check required variables based on AUTH_PROVIDER
+AUTH_PROVIDER="${AUTH_PROVIDER:-litellm}"
+
+if [ "$AUTH_PROVIDER" = "github-copilot" ]; then
+    # GitHub Copilot requires different variables
+    if [ -z "$GITHUB_COPILOT_ACCESS_TOKEN" ]; then
+        echo "Error: GITHUB_COPILOT_ACCESS_TOKEN not set in .env file"
+        echo "Required for GitHub Copilot authentication"
+        exit 1
+    fi
+    if [ -z "$MODEL_NAME" ]; then
+        echo "Error: MODEL_NAME not set in .env file"
+        exit 1
+    fi
+    # Set dummy values for compatibility with pipeline script
+    MODEL_API_KEY="${GITHUB_COPILOT_ACCESS_TOKEN}"
+    MODEL_BASE_URL="https://api.githubcopilot.com"
+else
+    # LiteLLM or other providers require MODEL_API_KEY
+    if [ -z "$MODEL_API_KEY" ]; then
+        echo "Error: MODEL_API_KEY not set in .env file"
+        exit 1
+    fi
 fi
 
 if [ -z "$OUTPUT_DIR" ]; then
@@ -159,6 +178,7 @@ echo "Step 2/2: Running pipeline with OpenCode..."
 echo "  Policy file: $POLICY"
 echo "  Output: $OUTPUT_DIR"
 echo "  Workers: $MAX_WORKERS"
+echo "  Auth Provider: $AUTH_PROVIDER"
 echo "  Model Base URL: $MODEL_BASE_URL"
 echo "  Model Name: $MODEL_NAME"
 echo "  API Provider: $API_PROVIDER"
@@ -181,8 +201,21 @@ DOCKER_CMD=(
     -e "API_PROVIDER=$API_PROVIDER"
     -e "AWS_REGION=$AWS_REGION"
     -e "AWS_USE_CROSS_REGION=$AWS_USE_CROSS_REGION"
+    -e "AUTH_PROVIDER=$AUTH_PROVIDER"
     -e "HOST_WORKSPACE_PATH=$(pwd)"
     -e "PYTHONUNBUFFERED=1"
+)
+
+# Add GitHub Copilot credentials if using GitHub Copilot
+if [ "$AUTH_PROVIDER" = "github-copilot" ]; then
+    DOCKER_CMD+=(
+        -e "GITHUB_COPILOT_ACCESS_TOKEN=$GITHUB_COPILOT_ACCESS_TOKEN"
+        -e "GITHUB_COPILOT_REFRESH_TOKEN=${GITHUB_COPILOT_REFRESH_TOKEN:-$GITHUB_COPILOT_ACCESS_TOKEN}"
+        -e "GITHUB_COPILOT_EXPIRES=${GITHUB_COPILOT_EXPIRES:-0}"
+    )
+fi
+
+DOCKER_CMD+=(
     icr.io/polaris-20251120/opencode-agent:latest
     python /usr/local/bin/run_pipeline-opencode.py
     --policy "$POLICY"
