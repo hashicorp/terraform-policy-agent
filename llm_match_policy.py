@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright IBM Corp. 2026
+
 """
 Use LLM to match policy names between summary.md and report.md.
 """
