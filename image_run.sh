@@ -151,6 +151,7 @@ docker run -d \
     --name mcp-server \
     -p 127.0.0.1:8300:8300 \
     -v "$(pwd):/workspace" \
+    -v "$(pwd)/database:/app/database:ro" \
     --restart unless-stopped \
     --network mcp-network \
     icr.io/polaris-20251120/mcp-server:latest

@@ -84,6 +84,9 @@ if [ "$AUTH_PROVIDER" = "github-copilot" ]; then
         exit 1
     fi
     GITHUB_COPILOT_EXPIRES="${GITHUB_COPILOT_EXPIRES:-0}"
+    # Set dummy values for compatibility with pipeline script
+    MODEL_API_KEY="${GITHUB_COPILOT_ACCESS_TOKEN}"
+    MODEL_BASE_URL="https://api.githubcopilot.com"
     echo "✓ Using GitHub Copilot authentication"
 else
     # LiteLLM or Bedrock authentication
@@ -251,6 +254,7 @@ docker run -d \
     --name mcp-server \
     -p 127.0.0.1:8300:8300 \
     -v "$(pwd):/workspace" \
+    -v "$(pwd)/database:/app/database:ro" \
     --restart unless-stopped \
     --network mcp-network \
     icr.io/polaris-20251120/mcp-server:latest
@@ -327,12 +331,8 @@ DOCKER_CMD+=(
     --model-name "$MODEL_NAME"
     --api-provider "$API_PROVIDER"
     --aws-region "$AWS_REGION"
+    --api-key "$MODEL_API_KEY"
 )
-
-# Add API key only for non-GitHub Copilot providers
-if [ "$AUTH_PROVIDER" != "github-copilot" ]; then
-    DOCKER_CMD+=(--api-key "$MODEL_API_KEY")
-fi
 
 # Add cross-region flag if enabled
 if [ "$AWS_USE_CROSS_REGION" = "true" ]; then
@@ -385,13 +385,14 @@ while IFS='|' read -r _ policy_name _ status _ _ _ _; do
         policy_slug="$policy_name"
     fi
     
-    # Normalize policy name for comparison: convert spaces to hyphens and lowercase
+    # Normalize policy name for comparison: convert spaces and underscores to hyphens and lowercase
     # "CloudTrail S3 Bucket Access Logging Enabled" -> "cloudtrail-s3-bucket-access-logging-enabled"
-    normalized_policy_name=$(echo "$policy_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    # "CloudTrail_Bucket_Access_Logging" -> "cloudtrail-bucket-access-logging"
+    normalized_policy_name=$(echo "$policy_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-')
     
     # Check status
     if [[ "$status" == *"Success"* ]] || [[ "$status" == "✅ Success" ]]; then
-        # Find corresponding policy directory by matching policy title in report.md
+        # Find corresponding policy directory by matching directory name with policy name
         policy_found=false
         for policy_dir in "$OUTPUT_DIR"/*/; do
             if [ ! -d "$policy_dir" ]; then
@@ -405,33 +406,19 @@ while IFS='|' read -r _ policy_name _ status _ _ _ _; do
             
             policy_dir_name=$(basename "$policy_dir")
             
-            # Extract policy title from report.md
-            report_file="$policy_dir/report.md"
-            if [ ! -f "$report_file" ]; then
+            # Normalize directory name for comparison
+            normalized_dir_name=$(echo "$policy_dir_name" | tr '[:upper:]' '[:lower:]' | tr ' _' '-')
+            
+            # Check if directory name matches policy name from summary
+            if [ "$normalized_dir_name" != "$normalized_policy_name" ]; then
                 continue
             fi
             
-            # Extract policy title from report.md (first # heading or "Policy Name:" field)
-            report_policy_name=$(grep -E "^# Policy Report:|^# [A-Z]|^\*\*Policy Name:\*\*" "$report_file" | head -1 | sed -E 's/^# Policy Report: //;s/^# //;s/^\*\*Policy Name:\*\* //')
-            
-            # Normalize report policy name for comparison
-            normalized_report_name=$(echo "$report_policy_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-            
-            # Also try without trailing " Policy" for flexible matching
-            normalized_report_name_no_policy=$(echo "$report_policy_name" | sed 's/ Policy$//' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-            
-            # Check if this matches the current policy name from summary (try both patterns)
-            if [ "$normalized_report_name" != "$normalized_policy_name" ] && [ "$normalized_report_name_no_policy" != "$normalized_policy_name" ]; then
-                # If no exact match, try LLM-based matching
-                if command -v python3 &> /dev/null && [ -f "llm_match_policy.py" ]; then
-                    llm_result=$(python3 llm_match_policy.py "$policy_name" "$report_policy_name" 2>/dev/null || echo "NO_MATCH")
-                    if [ "$llm_result" != "MATCH" ]; then
-                        continue
-                    fi
-                    echo "  ℹ️  Matched by LLM: '$policy_name' ≈ '$report_policy_name'"
-                else
-                    continue
-                fi
+            # Extract policy title from report.md
+            report_file="$policy_dir/report.md"
+            if [ ! -f "$report_file" ]; then
+                echo "  ⚠️  Warning: report.md not found in $policy_dir_name"
+                continue
             fi
             
             # Now we found the matching policy directory, extract sentinel path
