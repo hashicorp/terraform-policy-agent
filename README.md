@@ -31,7 +31,7 @@ docker login icr.io -u iamapikey
 # When prompted, enter your API key
 
 # Pull the image
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.11
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.12
 ```
 
 **Required Binaries**:
@@ -83,8 +83,8 @@ OUTPUT_DIR=output
 
 # Execution
 MAX_WORKERS=5
-IMAGE_NAME=terraform-pac-agent
-IMAGE_TAG=0.0.11
+IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
+IMAGE_TAG=0.0.12
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
@@ -146,9 +146,78 @@ Generate TF Policy for
 Output files will be generated under `data/output`:
 
 ```sh
-$ ls ./workspace/data/output 
+$ ls ./workspace/data/output
 CloudFront_Associated_WAF   goals                   summary.json
 stage0_extraction.log       stage3_summary.log      summary.md
+```
+
+### 7. Run with External Repository (Alternative)
+
+If you want to convert Sentinel libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
+
+Example repository: https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/tree/main/policies/cloudtrail
+
+**Step 1: Download the external repository**
+
+```bash
+curl -L https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/archive/refs/heads/main.zip | tar xz -C /tmp
+```
+
+**Step 2: Verify the repository structure**
+
+```bash
+$ ls /tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main
+CONTRIBUTING.md LICENSE         modules         README.md
+docs            Makefile        policies        sentinel.hcl
+```
+
+**Step 3: Set the external repository path in `.env`**
+
+For example, if you want to convert `policies/cloudtrail`:
+
+```bash
+EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail
+```
+
+**Step 4: Run the pipeline with the external repository**
+
+```bash
+./run_with_external_repo.sh
+```
+
+**Output:**
+
+Intermediate files will be generated in the `data` directory. The final converted policies will be created under `EXTERNAL_REPO_DIR/tfpolicy`, with each Sentinel policy having a corresponding Terraform policy directory.
+
+Example output structure:
+
+```
+/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail/tfpolicy
+├── cloudtrail-bucket-access-logging-enabled
+│   ├── cloudtrail-bucket-access-logging-enabled.policy.hcl
+│   ├── cloudtrail-bucket-access-logging-enabled.policytest.hcl
+│   ├── cloudtrail-bucket-access-logging-enabled.report.md
+│   └── cloudtrail-bucket-access-logging-enabled.tf
+├── cloudtrail-cloudwatch-logs-group-arn-present
+│   ├── cloudtrail-cloudwatch-logs-group-arn-present.policy.hcl
+│   ├── cloudtrail-cloudwatch-logs-group-arn-present.policytest.hcl
+│   ├── cloudtrail-cloudwatch-logs-group-arn-present.report.md
+│   └── cloudtrail-cloudwatch-logs-group-arn-present.tf
+├── cloudtrail-log-file-validation-enabled
+│   ├── cloudtrail-log-file-validation-enabled.policy.hcl
+│   ├── cloudtrail-log-file-validation-enabled.policytest.hcl
+│   ├── cloudtrail-log-file-validation-enabled.report.md
+│   └── cloudtrail-log-file-validation-enabled.tf
+├── cloudtrail-logs-bucket-not-public
+│   ├── cloudtrail-logs-bucket-not-public.policy.hcl
+│   ├── cloudtrail-logs-bucket-not-public.policytest.hcl
+│   ├── cloudtrail-logs-bucket-not-public.report.md
+│   └── cloudtrail-logs-bucket-not-public.tf
+└── cloudtrail-server-side-encryption-enabled
+    ├── cloudtrail-server-side-encryption-enabled.policy.hcl
+    ├── cloudtrail-server-side-encryption-enabled.policytest.hcl
+    ├── cloudtrail-server-side-encryption-enabled.report.md
+    └── cloudtrail-server-side-encryption-enabled.tf
 ```
 
 ## Pipeline Stages
