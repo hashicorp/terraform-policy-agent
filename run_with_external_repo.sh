@@ -4,6 +4,7 @@ set -e
 # Parse command line arguments
 PHASE=""
 STEP=""
+MOCK_OUTPUT_DIR=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --phase)
@@ -14,9 +15,13 @@ while [[ $# -gt 0 ]]; do
             STEP="$2"
             shift 2
             ;;
+        --mock-output)
+            MOCK_OUTPUT_DIR="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--phase <preprocess|generate|postprocess>] [--step <0|1|2|3>]"
+            echo "Usage: $0 [--phase <preprocess|generate|postprocess>] [--step <0|1|2|3>] [--mock-output <dir>]"
             echo ""
             echo "Phase Options:"
             echo "  --phase preprocess   Run only Phase 1 (Sentinel extraction)"
@@ -29,6 +34,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --step 2             Policy Generation"
             echo "  --step 3             Summary Generation"
             echo ""
+            echo "Mock Options:"
+            echo "  --mock-output <dir>  Skip Phase 2 and use pre-generated output from <dir>"
+            echo "                       Example: --mock-output archive_20260525_112836/output"
+            echo ""
             echo "If no options specified, runs all phases and all steps."
             echo ""
             echo "Examples:"
@@ -38,6 +47,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --phase generate --step 2 # Generate policies (step 2 only)"
             echo "  $0 --step 1                  # Run all phases, but only step 1 in Phase 2"
             echo "  $0 --phase postprocess       # Deploy to external repo only"
+            echo "  $0 --mock-output archive_20260525_112836/output  # Test with mock data"
             exit 1
             ;;
     esac
@@ -102,6 +112,9 @@ echo ""
 
 # Set default values if not set
 DATA_DIR="${DATA_DIR:-./data}"
+
+# Ensure DATA_DIR exists before resolving to an absolute path
+mkdir -p "$DATA_DIR"
 
 # Resolve DATA_DIR to absolute path from CWD
 if [[ "$DATA_DIR" = /* ]]; then
@@ -207,6 +220,21 @@ if [ "$RUN_PREPROCESS" = true ]; then
             cp "$sentinel_file" "$target_file"
             SENTINEL_COUNT=$((SENTINEL_COUNT + 1))
             echo "✓ Copied: $relative_path"
+            
+            # Check for mock files in test directory
+            mock_dir="$sentinel_dir/test/$sentinel_basename"
+            if [ -d "$mock_dir" ]; then
+                # Copy mock directory
+                relative_mock_path="${mock_dir#$EXTERNAL_REPO_DIR/}"
+                target_mock_dir="$SENTINELS_DIR/$relative_mock_path"
+                
+                mkdir -p "$target_mock_dir"
+                cp -r "$mock_dir"/* "$target_mock_dir/" 2>/dev/null || true
+                
+                if [ "$(ls -A "$target_mock_dir" 2>/dev/null)" ]; then
+                    echo "  ✓ Copied mock files: $relative_mock_path"
+                fi
+            fi
         fi
     done < <(find "$EXTERNAL_REPO_DIR" -type f -name "*.sentinel" -print0)
 
@@ -243,16 +271,35 @@ if [ "$RUN_PREPROCESS" = true ]; then
 
     # Add all sentinel files with path relative to DATA_DIR
     # Docker mounts DATA_DIR as /workspace/data, so paths should be relative to that
+    # Exclude files in test/ directories (mock files)
     while IFS= read -r -d '' sentinel_file; do
+        # Skip if this is a mock file in test/ directory
+        if [[ "$sentinel_file" == */test/* ]]; then
+            continue
+        fi
+        
         relative_path="${sentinel_file#$SENTINELS_DIR/}"
-        echo "./${INPUT_DIR_NAME}/sentinels/$relative_path" >> "$POLICY_GOAL_FILE"
-    done < <(find "$SENTINELS_DIR" -type f -name "*.sentinel" -print0)
+        sentinel_line="./data/${INPUT_DIR_NAME}/sentinels/$relative_path"
+        
+        # Check if mock directory exists for this sentinel
+        sentinel_basename=$(basename "$sentinel_file" .sentinel)
+        sentinel_dir=$(dirname "$sentinel_file")
+        mock_dir="$sentinel_dir/test/$sentinel_basename"
+        
+        if [ -d "$mock_dir" ] && [ "$(ls -A "$mock_dir" 2>/dev/null)" ]; then
+            # Mock directory exists and is not empty
+            relative_mock_path="${mock_dir#$SENTINELS_DIR/}"
+            echo "- ${sentinel_line}, Mock Files: ./data/${INPUT_DIR_NAME}/sentinels/$relative_mock_path" >> "$POLICY_GOAL_FILE"
+        else
+            echo "- ${sentinel_line}" >> "$POLICY_GOAL_FILE"
+        fi
+    done < <(find "$SENTINELS_DIR" -type f -name "*.sentinel" -print0 | sort -z)
 
     # Add sentinel.hcl reference if exists
     if [ -f "$SENTINELS_DIR/sentinel.hcl" ]; then
         echo "" >> "$POLICY_GOAL_FILE"
         echo "Enforcement level configuration file:" >> "$POLICY_GOAL_FILE"
-        echo "./${INPUT_DIR_NAME}/sentinels/sentinel.hcl" >> "$POLICY_GOAL_FILE"
+        echo "./data/${INPUT_DIR_NAME}/sentinels/sentinel.hcl" >> "$POLICY_GOAL_FILE"
     fi
 
     echo "✓ Generated $POLICY_GOAL_FILE"
@@ -280,39 +327,66 @@ fi
 
 # Phase 2: Generate
 if [ "$RUN_GENERATE" = true ]; then
-    echo "=========================================="
-    echo "Phase 2: Run Pipeline"
-    echo "=========================================="
-    echo ""
-
-    # Set environment variables for run.sh and run_pipeline.py
-    export DATA_DIR="$DATA_DIR_ABS"
-    export INPUT_DIR="$INPUT_DIR_NAME"
-    export OUTPUT_DIR="$OUTPUT_DIR_NAME"
-    export INPUT_FILE="policy_goal.txt"
-
-    echo "Running pipeline with OpenCode skills..."
-    echo "  Data Dir: $DATA_DIR_ABS"
-    echo "  Input:    $INPUT_DIR_NAME"
-    echo "  Output:   $OUTPUT_DIR_NAME"
-    echo "  Policy:   policy_goal.txt"
-    
-    if [ -n "$STEP" ]; then
-        echo "  Step:     $STEP"
-    fi
-    echo ""
-
-    # Change to project root for run_pipeline.py
-    cd "$PROJECT_ROOT"
-
-    # Run the pipeline
-    if [ -n "$STEP" ]; then
-        python3 "${SCRIPT_DIR}/run_pipeline.py" --step "$STEP"
+    # Check if using mock output
+    if [ -n "$MOCK_OUTPUT_DIR" ]; then
+        echo "=========================================="
+        echo "Phase 2: SKIPPED (Using Mock Output)"
+        echo "=========================================="
+        echo ""
+        
+        # Validate mock output directory
+        if [ ! -d "$MOCK_OUTPUT_DIR" ]; then
+            echo "Error: Mock output directory not found: $MOCK_OUTPUT_DIR"
+            exit 1
+        fi
+        
+        if [ ! -f "$MOCK_OUTPUT_DIR/summary.md" ]; then
+            echo "Error: summary.md not found in mock output directory: $MOCK_OUTPUT_DIR"
+            exit 1
+        fi
+        
+        echo "Using mock output from: $MOCK_OUTPUT_DIR"
+        echo ""
+        
+        # Copy mock output to TEMP_OUTPUT_DIR
+        echo "Copying mock output data..."
+        rm -rf "$TEMP_OUTPUT_DIR"
+        cp -r "$MOCK_OUTPUT_DIR" "$TEMP_OUTPUT_DIR"
+        echo "✓ Mock output copied to: $TEMP_OUTPUT_DIR"
+        echo ""
+        
     else
-        "${SCRIPT_DIR}/run.sh"
-    fi
+        echo "=========================================="
+        echo "Phase 2: Run Pipeline"
+        echo "=========================================="
+        echo ""
 
-    echo ""
+        # Set environment variables for run.sh and run_pipeline.py
+        export DATA_DIR="$DATA_DIR_ABS"
+        export INPUT_DIR="$INPUT_DIR_NAME"
+        export OUTPUT_DIR="$OUTPUT_DIR_NAME"
+        export INPUT_FILE="policy_goal.txt"
+
+        echo "Running pipeline with OpenCode skills..."
+        echo "  Data Dir: $DATA_DIR_ABS"
+        echo "  Input:    $INPUT_DIR_NAME"
+        echo "  Output:   $OUTPUT_DIR_NAME"
+        echo "  Policy:   policy_goal.txt"
+        
+        if [ -n "$STEP" ]; then
+            echo "  Step:     $STEP"
+        fi
+        echo ""
+
+        # Run the pipeline
+        if [ -n "$STEP" ]; then
+            python3 "${SCRIPT_DIR}/run_pipeline.py" --step "$STEP"
+        else
+            "${SCRIPT_DIR}/run.sh"
+        fi
+
+        echo ""
+    fi
 fi
 
 # Phase 3: Postprocessing
@@ -335,9 +409,9 @@ if [ "$RUN_POSTPROCESS" = true ]; then
     declare -a FAILED_POLICIES
 
     # Parse summary.md to get policy status
-    while IFS='|' read -r _ policy_name _ status _ _ _ _; do
+    while IFS='|' read -r _ policy_name status _ _ _ _; do
         # Skip header and separator lines
-        [[ "$policy_name" =~ ^[[:space:]]*Policy[[:space:]]*Name ]] && continue
+        [[ "$policy_name" =~ ^[[:space:]]*Generated[[:space:]]+TF[[:space:]]+Policy[[:space:]]+Name[[:space:]]*$ ]] && continue
         [[ "$policy_name" =~ ^[[:space:]]*-+[[:space:]]*$ ]] && continue
         [[ -z "$policy_name" ]] && continue
         
@@ -360,12 +434,25 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 
                 [ "$normalized_dir_name" != "$normalized_policy_name" ] && continue
                 
-                # Extract sentinel path from report.md
+                # Resolve sentinel path
                 report_file="$policy_dir/report.md"
-                [ ! -f "$report_file" ] && continue
+                sentinel_path=""
+                sentinel_basename_from_dir=$(echo "$normalized_dir_name" | tr '-' '_')
                 
-                sentinel_path=$(grep -o "sentinels/[^[:space:]]*\.sentinel" "$report_file" | head -n 1 | sed 's|sentinels/||')
-                [ -z "$sentinel_path" ] && continue
+                # First, try to identify the input sentinel directly from input/sentinels
+                if [ -d "${TEMP_INPUT_DIR}/sentinels" ]; then
+                    matched_sentinel=$(find "${TEMP_INPUT_DIR}/sentinels" -type f \( -name "${normalized_dir_name}.sentinel" -o -name "${sentinel_basename_from_dir}.sentinel" \) | head -n 1)
+                    if [ -n "$matched_sentinel" ]; then
+                        sentinel_path="${matched_sentinel#${TEMP_INPUT_DIR}/sentinels/}"
+                    fi
+                fi
+                
+                # Fallback to report.md if direct lookup failed
+                if [ -z "$sentinel_path" ]; then
+                    [ ! -f "$report_file" ] && continue
+                    sentinel_path=$(grep -o "sentinels/[^[:space:]]*\.sentinel" "$report_file" | head -n 1 | sed 's|sentinels/||')
+                    [ -z "$sentinel_path" ] && continue
+                fi
                 
                 # Determine target directory
                 sentinel_dir=$(dirname "$sentinel_path")
@@ -410,7 +497,7 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 break
             done
         fi
-    done < <(grep -A 1000 "^| Policy Name" "$summary_file" | grep "^|")
+    done < <(grep -A 1000 "^| Generated TF Policy Name" "$summary_file" | grep "^|")
 
     echo "=========================================="
     echo "✓ Deployment Complete!"
