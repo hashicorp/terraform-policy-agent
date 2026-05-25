@@ -31,7 +31,7 @@ docker login icr.io -u iamapikey
 # When prompted, enter your API key
 
 # Pull the image
-docker pull icr.io/polaris-20251120/terraform-pac-agent-skills:0.0.11
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.11
 ```
 
 **Required Binaries**:
