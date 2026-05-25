@@ -1,0 +1,741 @@
+#!/usr/bin/env python3
+"""
+Terraform Policy Automation Agent Skills - Pipeline Execution Script
+
+This script automates the execution of all stages in the policy generation pipeline:
+- Stage 0: Policy Extraction
+- Stage 1: Requirement Generation (parallel execution)
+- Stage 2: Policy Generation (parallel execution)
+- Stage 3: Summary Generation
+
+Based on MANUAL_STEPS.md
+
+Prerequisites:
+  1. Place your policy descriptions in data/input/policy_goal.txt
+  2. Set environment variables: MODEL_BASE_URL, MODEL_API_KEY, MODEL_NAME
+  3. Build Docker image: ./docker/build.sh
+  4. (Optional) Set MAX_WORKERS environment variable to control parallelism (default: 5)
+
+Usage:
+  python3 run_pipeline.py
+
+For individual stage execution, use docker/run.sh:
+  ./docker/run.sh --skill <skill-name> --prompt "<prompt>"
+"""
+
+import os
+import sys
+import subprocess
+import time
+import signal
+import atexit
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+
+
+class PipelineExecutor:
+    """Executes the Terraform PAC Agent Skills pipeline"""
+    
+    def __init__(self, script_dir: Path):
+        # script_dir is the directory where run_pipeline.py is located
+        self.script_dir = script_dir
+        self.project_root = script_dir.parent
+        
+        # Get DATA_DIR from environment, default to ./data
+        data_dir_str = os.getenv("DATA_DIR", "./data")
+        if os.path.isabs(data_dir_str):
+            self.data_dir = Path(data_dir_str)
+        else:
+            # Relative path - resolve from current working directory
+            self.data_dir = Path.cwd() / data_dir_str
+        
+        # Get INPUT_DIR from environment, default to input
+        input_dir_name = os.getenv("INPUT_DIR", "input")
+        
+        # Get OUTPUT_DIR from environment, default to output
+        output_dir_name = os.getenv("OUTPUT_DIR", "output")
+        
+        # Get MAX_WORKERS from environment, default to 5
+        self.max_workers = int(os.getenv("MAX_WORKERS", "5"))
+        
+        self.input_dir = self.data_dir / input_dir_name
+        self.output_dir = self.data_dir / output_dir_name
+        self.goals_dir = self.output_dir / "goals"
+        
+        # run.sh path - same directory as run_pipeline.py
+        self.run_sh = script_dir / "run.sh"
+        
+        # LLM configuration
+        self.auth_provider = os.getenv("AUTH_PROVIDER", "litellm")
+        self.model_base_url = os.getenv("MODEL_BASE_URL")
+        self.model_api_key = os.getenv("MODEL_API_KEY")
+        self.model_name = os.getenv("MODEL_NAME")
+        
+        # GitHub Copilot OAuth tokens (only needed if AUTH_PROVIDER=github-copilot)
+        self.github_copilot_access_token = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN")
+        self.github_copilot_refresh_token = os.getenv("GITHUB_COPILOT_REFRESH_TOKEN")
+        self.github_copilot_expires = os.getenv("GITHUB_COPILOT_EXPIRES")
+        
+        # Timeout configuration (in seconds)
+        self.stage0_timeout = int(os.getenv("STAGE0_TIMEOUT", "600"))  # 10 minutes
+        self.stage1_timeout = int(os.getenv("STAGE1_TIMEOUT", "300"))  # 5 minutes
+        self.stage2_timeout = int(os.getenv("STAGE2_TIMEOUT", "600"))  # 10 minutes
+        self.stage3_timeout_base = int(os.getenv("STAGE3_TIMEOUT_BASE", "180"))  # 3 minutes base
+        self.stage3_timeout_per_policy = int(os.getenv("STAGE3_TIMEOUT_PER_POLICY", "60"))  # 1 minute per policy
+        
+        # Track running containers for cleanup
+        self.running_containers: Set[str] = set()
+        self.cleanup_registered = False
+        
+        # Validate environment
+        self._validate_environment()
+    
+    def _validate_environment(self):
+        """Validate required environment variables and directories"""
+        # Validate based on AUTH_PROVIDER
+        if self.auth_provider == "github-copilot":
+            # GitHub Copilot requires MODEL_NAME and OAuth tokens
+            if not self.model_name:
+                raise ValueError("MODEL_NAME environment variable is not set (required for GitHub Copilot)")
+            if not self.github_copilot_access_token:
+                raise ValueError("GITHUB_COPILOT_ACCESS_TOKEN environment variable is not set (required for GitHub Copilot)")
+        else:
+            # LiteLLM requires MODEL_BASE_URL, MODEL_API_KEY, and MODEL_NAME
+            if not self.model_base_url:
+                raise ValueError("MODEL_BASE_URL environment variable is not set (required for LiteLLM)")
+            if not self.model_api_key:
+                raise ValueError("MODEL_API_KEY environment variable is not set (required for LiteLLM)")
+            if not self.model_name:
+                raise ValueError("MODEL_NAME environment variable is not set (required for LiteLLM)")
+        
+        # Create directories
+        self.input_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.goals_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Register cleanup handlers
+        if not self.cleanup_registered:
+            atexit.register(self._cleanup_containers)
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            self.cleanup_registered = True
+    
+    def _signal_handler(self, signum, frame):
+        """Handle interrupt signals (Ctrl+C)"""
+        print("\n\n⚠️  Interrupt received! Cleaning up containers...")
+        self._cleanup_containers()
+        sys.exit(1)
+    
+    def _cleanup_containers(self):
+        """Stop and remove all running containers"""
+        if not self.running_containers:
+            return
+        
+        print(f"\n🧹 Cleaning up {len(self.running_containers)} container(s)...")
+        for container_name in list(self.running_containers):
+            try:
+                # Try to stop the container
+                subprocess.run(
+                    ["docker", "stop", container_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5
+                )
+                # Try to remove the container
+                subprocess.run(
+                    ["docker", "rm", "-f", container_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5
+                )
+                print(f"  ✓ Cleaned up: {container_name}")
+            except Exception as e:
+                print(f"  ✗ Failed to cleanup {container_name}: {e}")
+            finally:
+                self.running_containers.discard(container_name)
+        
+        print("✅ Cleanup complete\n")
+    
+    def _run_docker_command(
+        self,
+        skill: str,
+        prompt: str,
+        stage_name: str,
+        container_suffix: str = "",
+        log_file: Optional[Path] = None,
+        timeout_seconds: int = 600,
+        skill_args: Optional[List[str]] = None,
+        verbose: bool = False
+    ) -> bool:
+        """
+        Run a Docker command for a specific skill using run.sh
+        
+        Args:
+            skill: Skill name (e.g., "step0-extraction")
+            prompt: Natural language prompt for the skill (used only if skill_args not provided)
+            stage_name: Human-readable stage name for logging
+            container_suffix: Suffix for container name (for parallel execution)
+            log_file: Path to log file for stdout/stderr
+            timeout_seconds: Timeout in seconds (default: 600 = 10 minutes)
+            skill_args: Optional list of skill-specific arguments (e.g., ["--goal-file", "goal-001.txt"])
+            verbose: If True, stream output to console; if False, only write to log file (default: False)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        # Build command with skill-specific args or fallback to prompt
+        cmd = [str(self.run_sh), skill]
+        if skill_args:
+            cmd.extend(skill_args)
+        else:
+            cmd.extend(["--prompt", prompt])
+        
+        # Set unique container name for parallel execution
+        container_name = "terraform-pac-agent-skills"
+        if container_suffix:
+            container_name = f"terraform-pac-agent-skills-{container_suffix}"
+        
+        log_handle = None
+        try:
+            # Open log file if specified
+            if log_file:
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                log_handle = open(log_file, 'w', encoding='utf-8')
+                log_handle.write(f"{'='*80}\n")
+                log_handle.write(f"{stage_name}\n")
+                log_handle.write(f"{'='*80}\n")
+                log_handle.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                log_handle.write(f"Command: {' '.join(cmd)}\n")
+                log_handle.write(f"{'='*80}\n\n")
+                log_handle.flush()
+            
+            # Set environment with container name
+            env = os.environ.copy()
+            env['CONTAINER_NAME'] = container_name
+            
+            # Track this container
+            self.running_containers.add(container_name)
+            
+            # Run command with streaming output and timeout
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env
+            )
+            
+            # Stream output to both console and log file with timeout
+            start_time = time.time()
+            
+            # Use select for non-blocking I/O with timeout support
+            import select
+            
+            # Stream output in real-time to log file and console
+            while True:
+                # Check timeout before reading
+                elapsed = time.time() - start_time
+                if elapsed > timeout_seconds:
+                    # Timeout exceeded - stop the Docker container
+                    print(f"\n⏱️  Timeout reached, stopping container: {container_name}")
+                    
+                    # Stop the Docker container
+                    try:
+                        subprocess.run(
+                            ["docker", "stop", container_name],
+                            timeout=5,
+                            capture_output=True
+                        )
+                    except Exception as e:
+                        print(f"Warning: Failed to stop container: {e}")
+                    
+                    # Kill the run.sh process
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    
+                    # Remove from tracking
+                    self.running_containers.discard(container_name)
+                    
+                    timeout_msg = f"\n❌ {stage_name} timed out after {timeout_seconds} seconds ({timeout_seconds/60:.1f} minutes)\n"
+                    print(timeout_msg)
+                    if log_handle:
+                        log_handle.write(timeout_msg)
+                        log_handle.close()
+                    return False
+                
+                # Check if process has finished
+                if process.poll() is not None:
+                    # Read any remaining output
+                    if process.stdout:
+                        remaining = process.stdout.read()
+                        if remaining:
+                            if verbose:
+                                print(remaining, end='')
+                            if log_handle:
+                                log_handle.write(remaining)
+                                log_handle.flush()
+                    break
+                
+                # Use select to check if data is available (with 1 second timeout)
+                if process.stdout:
+                    ready, _, _ = select.select([process.stdout], [], [], 1.0)
+                    
+                    if ready:
+                        line = process.stdout.readline()
+                        if line:
+                            # Write to log file (and optionally console)
+                            if verbose:
+                                print(line, end='')
+                            if log_handle:
+                                log_handle.write(line)
+                                log_handle.flush()
+            
+            # Get the return code (process has already finished)
+            return_code = process.returncode
+            
+            if log_handle:
+                log_handle.write(f"\n{'='*80}\n")
+                log_handle.write(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                log_handle.write(f"Return code: {return_code}\n")
+                log_handle.write(f"Execution time: {time.time() - start_time:.2f} seconds\n")
+                log_handle.close()
+            
+            # Remove from tracking
+            self.running_containers.discard(container_name)
+            
+            # Print completion message to console
+            elapsed = time.time() - start_time
+            if return_code != 0:
+                print(f"[{stage_name}] Failed ({elapsed:.1f}s) ✗")
+                if log_file:
+                    print(f"  Log: {log_file}")
+                return False
+            else:
+                print(f"[{stage_name}] Completed ({elapsed:.1f}s) ✓")
+            
+            return True
+            
+        except subprocess.TimeoutExpired:
+            timeout_msg = f"\n❌ {stage_name} timed out after {timeout_seconds} seconds ({timeout_seconds/60:.1f} minutes)\n"
+            print(timeout_msg)
+            if log_handle and not log_handle.closed:
+                log_handle.write(timeout_msg)
+                log_handle.close()
+            self.running_containers.discard(container_name)
+            return False
+        except Exception as e:
+            error_msg = f"\n❌ {stage_name} failed with error: {e}\n"
+            print(error_msg)
+            if log_handle and not log_handle.closed:
+                log_handle.write(error_msg)
+                log_handle.close()
+            self.running_containers.discard(container_name)
+            return False
+    
+    def stage0_extraction(self) -> bool:
+        """Stage 0: Extract individual goals from policy descriptions"""
+        # Read INPUT_FILE from environment (default: "policy_goal.txt")
+        input_file = os.getenv("INPUT_FILE", "policy_goal.txt")
+        input_path = self.input_dir / input_file
+        
+        if not input_path.exists():
+            print(f"❌ Input file not found: {input_path}")
+            print(f"Please create the file with your policy descriptions:")
+            print(f"  mkdir -p {self.input_dir}")
+            print(f"  cat > {input_path} << 'EOF'")
+            print(f"  Generate TF Policy for")
+            print(f"  SecurityHub: IAM.21")
+            print(f"  EOF")
+            return False
+        
+        print(f"\n{'='*80}")
+        print(f"Stage 0: Policy Extraction")
+        print(f"{'='*80}\n")
+        
+        log_file = self.output_dir / "stage0_extraction.log"
+        
+        # Note: INPUT_FILE is read from .env, not passed as argument
+        # Use configured timeout
+        success = self._run_docker_command(
+            skill="step0-extraction",
+            prompt="",  # Uses default prompt from run.sh
+            stage_name="Stage 0: Policy Extraction",
+            log_file=log_file,
+            timeout_seconds=self.stage0_timeout,
+            skill_args=[]  # No arguments needed, INPUT_FILE from .env
+        )
+        
+        return success
+    
+    def _run_single_requirement(self, goal_file: Path, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
+        """
+        Run requirement generation for a single goal file
+        
+        Args:
+            goal_file: Path to the goal file
+            index: Current index in processing
+            total: Total number of goals
+            retry: Whether this is a retry attempt
+        
+        Returns:
+            Tuple of (goal_name, success, error_message)
+        """
+        goal_name = goal_file.stem
+        log_suffix = "_retry" if retry else ""
+        log_file = self.goals_dir / f"{goal_name}_stage1{log_suffix}.log"
+        
+        retry_label = " (retry)" if retry else ""
+        print(f"  [{index}/{total}] Processing{retry_label}: {goal_file.name}")
+        
+        # Use configured timeout
+        success = self._run_docker_command(
+            skill="step1-requirement",
+            prompt="",  # Not used when skill_args provided
+            stage_name=f"Stage 1: Requirement ({goal_name}){retry_label}",
+            container_suffix=f"{goal_name}{'-retry' if retry else ''}",
+            log_file=log_file,
+            timeout_seconds=self.stage1_timeout,
+            skill_args=["--goal-file", goal_file.name]
+        )
+        
+        return (goal_name, success, "" if success else "Execution failed")
+    
+    def stage1_requirement(self) -> bool:
+        """Stage 1: Generate requirements for all goals (parallel execution with priority retry)"""
+        from queue import PriorityQueue
+        from threading import Lock
+        
+        goal_files = sorted(list(self.goals_dir.glob("goal-*.txt")))
+        
+        if not goal_files:
+            print("❌ No goal files found")
+            return False
+        
+        print(f"\n{'='*80}")
+        print(f"Stage 1: Requirement Generation (Parallel)")
+        print(f"{'='*80}")
+        print(f"Found {len(goal_files)} goal(s) to process")
+        print(f"Max workers: {self.max_workers}\n")
+        
+        # Priority queue: (priority, counter, goal_file, index, is_retry)
+        # Lower priority number = higher priority (0 = retry, 1 = initial)
+        task_queue = PriorityQueue()
+        task_counter = 0
+        results: Dict[str, Tuple[bool, str]] = {}
+        retry_count: Dict[str, int] = {}
+        results_lock = Lock()
+        
+        # Add initial tasks to queue (priority=1 for initial tasks)
+        for index, goal_file in enumerate(goal_files, 1):
+            task_queue.put((1, task_counter, goal_file, index, False))
+            task_counter += 1
+            goal_name = goal_file.stem
+            retry_count[goal_name] = 0
+        
+        total_tasks = len(goal_files)
+        completed = 0
+        failed = 0
+        
+        # Worker function that processes tasks from the queue
+        def worker():
+            nonlocal completed, failed, task_counter
+            
+            while True:
+                try:
+                    # Get task from queue (blocks if empty)
+                    priority, _, goal_file, index, is_retry = task_queue.get(timeout=1)
+                except:
+                    # Queue is empty and timeout reached
+                    break
+                
+                try:
+                    # Execute the task
+                    goal_name, success, error = self._run_single_requirement(
+                        goal_file, index, total_tasks, retry=is_retry
+                    )
+                    
+                    retry_label = " (retry)" if is_retry else ""
+                    
+                    with results_lock:
+                        if success:
+                            completed += 1
+                            results[goal_name] = (success, error)
+                            log_suffix = "_retry" if is_retry else ""
+                            log_file = self.goals_dir / f"{goal_name}_stage1{log_suffix}.log"
+                            print(f"  ✓ Completed{retry_label}: {goal_name} (log: {log_file})")
+                        else:
+                            # Check if we should retry
+                            if retry_count[goal_name] == 0:
+                                # Add retry task with higher priority (0)
+                                retry_count[goal_name] = 1
+                                print(f"  ✗ Failed{retry_label}: {goal_name} - {error}")
+                                print(f"  ⟳ Queuing retry with high priority: {goal_name}")
+                                task_queue.put((0, task_counter, goal_file, index, True))
+                                task_counter += 1
+                            else:
+                                # Already retried once, mark as final failure
+                                failed += 1
+                                results[goal_name] = (success, error)
+                                print(f"  ✗ Failed{retry_label}: {goal_name} - {error} (no more retries)")
+                finally:
+                    task_queue.task_done()
+        
+        # Start worker threads
+        import threading
+        threads = []
+        for _ in range(self.max_workers):
+            t = threading.Thread(target=worker)
+            t.start()
+            threads.append(t)
+        
+        # Wait for all tasks to complete
+        task_queue.join()
+        
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
+        
+        print(f"\n✅ Stage 1 completed: {completed} succeeded, {failed} failed\n")
+        
+        return failed == 0
+    
+    def _run_single_generation(self, policy_dir: str, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
+        """
+        Run policy generation for a single policy directory
+        
+        Args:
+            policy_dir: Name of the policy directory
+            index: Current index in processing
+            total: Total number of policies
+            retry: Whether this is a retry attempt
+        
+        Returns:
+            Tuple of (policy_name, success, error_message)
+        """
+        log_suffix = "_retry" if retry else ""
+        log_file = self.output_dir / policy_dir / f"stage2_generation{log_suffix}.log"
+        
+        retry_label = " (retry)" if retry else ""
+        print(f"  [{index}/{total}] Processing{retry_label}: {policy_dir}")
+        
+        # Use configured timeout
+        success = self._run_docker_command(
+            skill="step2-generation",
+            prompt="",  # Not used when skill_args provided
+            stage_name=f"Stage 2: Generation ({policy_dir}){retry_label}",
+            container_suffix=f"{policy_dir.replace('/', '-')}{'-retry' if retry else ''}",
+            log_file=log_file,
+            timeout_seconds=self.stage2_timeout,
+            skill_args=["--policy-dir", policy_dir]
+        )
+        
+        return (policy_dir, success, "" if success else "Execution failed")
+    
+    def stage2_generation(self) -> bool:
+        """Stage 2: Generate policies and tests (parallel execution with priority retry)"""
+        from queue import PriorityQueue
+        from threading import Lock
+        
+        policy_dirs = sorted([
+            d.name for d in self.output_dir.iterdir()
+            if d.is_dir() and d.name != "goals"
+        ])
+        
+        if not policy_dirs:
+            print("❌ No policy directories found")
+            return False
+        
+        print(f"\n{'='*80}")
+        print(f"Stage 2: Policy Generation (Parallel)")
+        print(f"{'='*80}")
+        print(f"Found {len(policy_dirs)} policy/policies to process")
+        print(f"Max workers: {self.max_workers}\n")
+        
+        # Priority queue: (priority, counter, policy_dir, index, is_retry)
+        # Lower priority number = higher priority (0 = retry, 1 = initial)
+        task_queue = PriorityQueue()
+        task_counter = 0
+        results: Dict[str, Tuple[bool, str]] = {}
+        retry_count: Dict[str, int] = {}
+        results_lock = Lock()
+        
+        # Add initial tasks to queue (priority=1 for initial tasks)
+        for index, policy_dir in enumerate(policy_dirs, 1):
+            task_queue.put((1, task_counter, policy_dir, index, False))
+            task_counter += 1
+            retry_count[policy_dir] = 0
+        
+        total_tasks = len(policy_dirs)
+        completed = 0
+        failed = 0
+        
+        # Worker function that processes tasks from the queue
+        def worker():
+            nonlocal completed, failed, task_counter
+            
+            while True:
+                try:
+                    # Get task from queue (blocks if empty)
+                    priority, _, policy_dir, index, is_retry = task_queue.get(timeout=1)
+                except:
+                    # Queue is empty and timeout reached
+                    break
+                
+                try:
+                    # Execute the task
+                    policy_name, success, error = self._run_single_generation(
+                        policy_dir, index, total_tasks, retry=is_retry
+                    )
+                    
+                    retry_label = " (retry)" if is_retry else ""
+                    
+                    with results_lock:
+                        if success:
+                            completed += 1
+                            results[policy_name] = (success, error)
+                            log_suffix = "_retry" if is_retry else ""
+                            log_file = self.output_dir / policy_name / f"stage2_generation{log_suffix}.log"
+                            print(f"  ✓ Completed{retry_label}: {policy_name} (log: {log_file})")
+                        else:
+                            # Check if we should retry
+                            if retry_count[policy_dir] == 0:
+                                # Add retry task with higher priority (0)
+                                retry_count[policy_dir] = 1
+                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error}")
+                                print(f"  ⟳ Queuing retry with high priority: {policy_name}")
+                                task_queue.put((0, task_counter, policy_dir, index, True))
+                                task_counter += 1
+                            else:
+                                # Already retried once, mark as final failure
+                                failed += 1
+                                results[policy_name] = (success, error)
+                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error} (no more retries)")
+                finally:
+                    task_queue.task_done()
+        
+        # Start worker threads
+        import threading
+        threads = []
+        for _ in range(self.max_workers):
+            t = threading.Thread(target=worker)
+            t.start()
+            threads.append(t)
+        
+        # Wait for all tasks to complete
+        task_queue.join()
+        
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
+        
+        print(f"\n✅ Stage 2 completed: {completed} succeeded, {failed} failed\n")
+        
+        return failed == 0
+    
+    def stage3_summary(self) -> bool:
+        """Stage 3: Generate summary of all policies"""
+        print(f"\n{'='*80}")
+        print(f"Stage 3: Summary Generation")
+        print(f"{'='*80}\n")
+        
+        prompt = "Collect results from all policies in /workspace/data/output/ and generate summary in /workspace/data/output/"
+        log_file = self.output_dir / "stage3_summary.log"
+        
+        # Count policy directories to calculate dynamic timeout
+        policy_count = len([d for d in self.output_dir.iterdir() if d.is_dir() and d.name != "goals"])
+        # Use configured timeout: base + per-policy
+        timeout_seconds = self.stage3_timeout_base + (policy_count * self.stage3_timeout_per_policy)
+        
+        success = self._run_docker_command(
+            skill="step3-summary",
+            prompt=prompt,
+            stage_name="Stage 3: Summary Generation",
+            log_file=log_file,
+            timeout_seconds=timeout_seconds
+        )
+        
+        return success
+    
+    def run_full_pipeline(self) -> bool:
+        """
+        Run the complete pipeline from start to finish
+        
+        Returns:
+            True if all stages successful, False otherwise
+        """
+        print("\n" + "="*80)
+        print("Terraform Policy Automation Agent Skills - Full Pipeline")
+        print("="*80)
+        print(f"Model: {self.model_name}")
+        print(f"Input: {self.input_dir}/{os.getenv('INPUT_FILE', 'policy_goal.txt')}")
+        print(f"Max Workers: {self.max_workers}")
+        print("="*80 + "\n")
+        
+        start_time = time.time()
+        
+        # Stage 0: Extraction
+        if not self.stage0_extraction():
+            print("\n❌ Pipeline failed at Stage 0")
+            return False
+        
+        # Stage 1: Requirement Generation (parallel)
+        if not self.stage1_requirement():
+            print("\n⚠️  Stage 1 had failures, but continuing...")
+        
+        # Stage 2: Policy Generation (parallel)
+        if not self.stage2_generation():
+            print("\n⚠️  Stage 2 had failures, but continuing...")
+        
+        # Stage 3: Summary
+        if not self.stage3_summary():
+            print("\n❌ Pipeline failed at Stage 3")
+            return False
+        
+        elapsed_time = time.time() - start_time
+        
+        print("\n" + "="*80)
+        print("✅ Full pipeline completed!")
+        print(f"Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.1f} minutes)")
+        print(f"\nLogs location:")
+        print(f"  Stage 0: {self.output_dir}/stage0_extraction.log")
+        print(f"  Stage 1: {self.goals_dir}/goal-*_stage1.log")
+        print(f"  Stage 2: {self.output_dir}/<PolicyName>/stage2_generation.log")
+        print(f"  Stage 3: {self.output_dir}/stage3_summary.log")
+        print("="*80 + "\n")
+        
+        return True
+
+
+def main():
+    """Main entry point"""
+    # Get script directory (where run_pipeline.py is located)
+    script_dir = Path(__file__).parent.resolve()
+    
+    # Create executor
+    try:
+        executor = PipelineExecutor(script_dir)
+    except ValueError as e:
+        print(f"❌ Configuration error: {e}")
+        print("\nPlease set the following environment variables:")
+        print("  export MODEL_BASE_URL='https://your-litellm-endpoint.com'")
+        print("  export MODEL_API_KEY='sk-your-api-key'")
+        print("  export MODEL_NAME='aws/claude-sonnet-4-5'")
+        sys.exit(1)
+    
+    # Execute full pipeline
+    success = executor.run_full_pipeline()
+    
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
+
+# Made with Bob
