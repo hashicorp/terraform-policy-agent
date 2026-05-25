@@ -83,8 +83,8 @@ OUTPUT_DIR=output
 
 # Execution
 MAX_WORKERS=5
-IMAGE_NAME=terraform-pac-agent-skills
-IMAGE_TAG=0.0.9
+IMAGE_NAME=terraform-pac-agent
+IMAGE_TAG=0.0.11
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
