@@ -31,7 +31,7 @@ docker login icr.io -u iamapikey
 # When prompted, enter your API key
 
 # Pull the image
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.13
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.14
 ```
 
 **Required Binaries**:
@@ -84,7 +84,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.13
+IMAGE_TAG=0.0.14
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
@@ -256,8 +256,8 @@ data/
     │   └── goal-002.txt
     ├── PolicyName/
     │   ├── requirement.txt
-    │   ├── policy.policy.hcl
-    │   ├── test.policytest.hcl
+    │   ├── <policy_name>.policy.hcl
+    │   ├── <policy_name>.policytest.hcl
     │   ├── main.tf
     │   ├── gwt.json
     │   └── report.md
