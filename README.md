@@ -31,7 +31,7 @@ docker login icr.io -u iamapikey
 # When prompted, enter your API key
 
 # Pull the image
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.12
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.13
 ```
 
 **Required Binaries**:
@@ -84,13 +84,28 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.12
+IMAGE_TAG=0.0.13
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
 # Intel Mac/Linux: use linux-amd64 binaries
 TERRAFORM_BINARY_PATH=/path/to/terraform
 TFPOLICY_BINARY_PATH=/path/to/tfpolicy
+
+# Stage 0: Extraction timeout
+STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
+
+# Stage 1: Requirement Generation timeout (per goal)
+STAGE1_TIMEOUT=300  # Optional, defaults to 300 (5 minutes)
+
+# Stage 2: Policy Generation timeout (per policy)
+STAGE2_TIMEOUT=900  # Optional, defaults to 600 (10 minutes)
+# Note: For complex policies, consider increasing to 900 or more (15 minutes)
+
+# Stage 3: Summary Generation timeout
+# Total timeout = STAGE3_TIMEOUT_BASE + (policy_count * STAGE3_TIMEOUT_PER_POLICY)
+STAGE3_TIMEOUT_BASE=180  # Optional, defaults to 180 (3 minutes base)
+STAGE3_TIMEOUT_PER_POLICY=60  # Optional, defaults to 60 (1 minute per policy)
 ```
 
 ### 4. Prepare Data Directory
