@@ -466,12 +466,39 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 
                 mkdir -p "$target_dir"
                 
-                # Check required files
+                # Check required files - use dynamic filenames based on policy directory name
+                # Find policy and test files that match the directory name (case-insensitive)
+                policy_file=""
                 policytest_file=""
-                [ -f "$policy_dir/policy.policytest.hcl" ] && policytest_file="$policy_dir/policy.policytest.hcl"
-                [ -f "$policy_dir/test.policytest.hcl" ] && policytest_file="$policy_dir/test.policytest.hcl"
                 
-                if [ ! -f "$policy_dir/policy.policy.hcl" ] || [ -z "$policytest_file" ] || [ ! -f "$policy_dir/main.tf" ] || [ ! -f "$policy_dir/report.md" ]; then
+                # Search for files matching the pattern (case-insensitive)
+                for file in "$policy_dir"/*.policy.hcl; do
+                    if [ -f "$file" ]; then
+                        filename=$(basename "$file" .policy.hcl)
+                        # Case-insensitive comparison using tr
+                        filename_lower=$(echo "$filename" | tr '[:upper:]' '[:lower:]')
+                        policy_dir_name_lower=$(echo "$policy_dir_name" | tr '[:upper:]' '[:lower:]')
+                        if [ "$filename_lower" = "$policy_dir_name_lower" ]; then
+                            policy_file="$file"
+                            break
+                        fi
+                    fi
+                done
+                
+                for file in "$policy_dir"/*.policytest.hcl; do
+                    if [ -f "$file" ]; then
+                        filename=$(basename "$file" .policytest.hcl)
+                        # Case-insensitive comparison using tr
+                        filename_lower=$(echo "$filename" | tr '[:upper:]' '[:lower:]')
+                        policy_dir_name_lower=$(echo "$policy_dir_name" | tr '[:upper:]' '[:lower:]')
+                        if [ "$filename_lower" = "$policy_dir_name_lower" ]; then
+                            policytest_file="$file"
+                            break
+                        fi
+                    fi
+                done
+                
+                if [ -z "$policy_file" ] || [ -z "$policytest_file" ] || [ ! -f "$policy_dir/main.tf" ] || [ ! -f "$policy_dir/report.md" ]; then
                     FAILED_POLICIES+=("$sentinel_path (missing files)")
                     policy_found=true
                     break
@@ -479,7 +506,7 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 
                 echo "📦 Deploying: $policy_dir_name → tfpolicy/$sentinel_basename/"
                 
-                cp "$policy_dir/policy.policy.hcl" "$target_dir/$sentinel_basename.policy.hcl"
+                cp "$policy_file" "$target_dir/$sentinel_basename.policy.hcl"
                 echo "  ✓ $sentinel_basename.policy.hcl"
                 
                 cp "$policytest_file" "$target_dir/$sentinel_basename.policytest.hcl"

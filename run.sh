@@ -102,17 +102,17 @@ IMAGE_TAG="${IMAGE_TAG:-latest}"
 CONTAINER_PREFIX="${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
 CONTAINER_NAME="${CONTAINER_NAME:-${CONTAINER_PREFIX}}"
 
-# Check if containers with the same prefix are already running
-RUNNING_CONTAINERS=$(docker ps -q -f name="^${CONTAINER_PREFIX}")
+# Check if container with the same name is already running
+RUNNING_CONTAINERS=$(docker ps -q -f name="^${CONTAINER_NAME}$")
 if [ -n "$RUNNING_CONTAINERS" ]; then
-    echo "ERROR: Containers with prefix '${CONTAINER_PREFIX}' are already running"
+    echo "ERROR: Container with name '${CONTAINER_NAME}' is already running"
     echo ""
     echo "Please choose one of the following options:"
-    echo "  1. Stop all containers with this prefix: docker stop \$(docker ps -q -f name='^${CONTAINER_PREFIX}')"
-    echo "  2. Set a different CONTAINER_PREFIX in .env file: CONTAINER_PREFIX='my-custom-prefix'"
+    echo "  1. Stop the container: docker stop ${CONTAINER_NAME}"
+    echo "  2. Set a different CONTAINER_NAME or CONTAINER_PREFIX in .env file"
     echo ""
-    echo "Currently running containers with this prefix:"
-    docker ps -f name="^${CONTAINER_PREFIX}" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"
+    echo "Currently running container:"
+    docker ps -f name="^${CONTAINER_NAME}$" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"
     exit 1
 fi
 
