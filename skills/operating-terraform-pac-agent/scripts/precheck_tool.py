@@ -77,7 +77,9 @@ def main() -> int:
     env_path = repo_root / ".env"
 
     if len(sys.argv) > 1 and sys.argv[1] == "--summarize-output":
-        output_dir = repo_root / "data" / "output"
+        env = parse_env_file(env_path) if env_path.exists() else {}
+        data_dir = resolve_path(repo_root, env.get("DATA_DIR", "./data"))
+        output_dir = data_dir / env.get("OUTPUT_DIR", "output")
         print(json.dumps(summarize_output(output_dir), indent=2))
         return 0
 

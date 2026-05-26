@@ -13,7 +13,8 @@ def parse_env_file(path: Path) -> dict:
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        data[key.strip()] = value.strip()
+        value = value.split("  #")[0].split("\t#")[0].strip()
+        data[key.strip()] = value
     return data
 
 
