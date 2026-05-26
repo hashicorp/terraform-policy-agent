@@ -98,7 +98,24 @@ fi
 
 IMAGE_NAME="${IMAGE_NAME:-terraform-pac-agent-skills}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-CONTAINER_NAME="${CONTAINER_NAME:-terraform-pac-agent-skills}"
+# Use CONTAINER_PREFIX if CONTAINER_NAME is not set
+CONTAINER_PREFIX="${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+CONTAINER_NAME="${CONTAINER_NAME:-${CONTAINER_PREFIX}}"
+
+# Check if containers with the same prefix are already running
+RUNNING_CONTAINERS=$(docker ps -q -f name="^${CONTAINER_PREFIX}")
+if [ -n "$RUNNING_CONTAINERS" ]; then
+    echo "ERROR: Containers with prefix '${CONTAINER_PREFIX}' are already running"
+    echo ""
+    echo "Please choose one of the following options:"
+    echo "  1. Stop all containers with this prefix: docker stop \$(docker ps -q -f name='^${CONTAINER_PREFIX}')"
+    echo "  2. Set a different CONTAINER_PREFIX in .env file: CONTAINER_PREFIX='my-custom-prefix'"
+    echo ""
+    echo "Currently running containers with this prefix:"
+    docker ps -f name="^${CONTAINER_PREFIX}" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"
+    exit 1
+fi
+
 DATA_DIR="${DATA_DIR:-./data}"
 INPUT_DIR="${INPUT_DIR:-input}"
 OUTPUT_DIR="${OUTPUT_DIR:-output}"
@@ -198,6 +215,46 @@ if [ $# -eq 0 ]; then
     # Validate environment variables
     validate_env_vars
     
+    # Check required binary paths
+    if [ -z "$TERRAFORM_BINARY_PATH" ]; then
+        echo "ERROR: TERRAFORM_BINARY_PATH environment variable not set"
+        echo "Please set: export TERRAFORM_BINARY_PATH=/path/to/terraform"
+        exit 1
+    fi
+    
+    if [ -z "$TFPOLICY_BINARY_PATH" ]; then
+        echo "ERROR: TFPOLICY_BINARY_PATH environment variable not set"
+        echo "Please set: export TFPOLICY_BINARY_PATH=/path/to/tfpolicy"
+        exit 1
+    fi
+    
+    # Resolve paths before validation
+    TERRAFORM_BINARY_PATH_RESOLVED=$(resolve_path "$TERRAFORM_BINARY_PATH" "file")
+    TFPOLICY_BINARY_PATH_RESOLVED=$(resolve_path "$TFPOLICY_BINARY_PATH" "file")
+    
+    # Verify binary files exist and are executable
+    if [ ! -f "$TERRAFORM_BINARY_PATH_RESOLVED" ]; then
+        echo "ERROR: Terraform binary not found at: $TERRAFORM_BINARY_PATH_RESOLVED"
+        exit 1
+    fi
+    
+    if [ ! -x "$TERRAFORM_BINARY_PATH_RESOLVED" ]; then
+        echo "ERROR: Terraform binary is not executable: $TERRAFORM_BINARY_PATH_RESOLVED"
+        echo "Run: chmod +x $TERRAFORM_BINARY_PATH_RESOLVED"
+        exit 1
+    fi
+    
+    if [ ! -f "$TFPOLICY_BINARY_PATH_RESOLVED" ]; then
+        echo "ERROR: tfpolicy binary not found at: $TFPOLICY_BINARY_PATH_RESOLVED"
+        exit 1
+    fi
+    
+    if [ ! -x "$TFPOLICY_BINARY_PATH_RESOLVED" ]; then
+        echo "ERROR: tfpolicy binary is not executable: $TFPOLICY_BINARY_PATH_RESOLVED"
+        echo "Run: chmod +x $TFPOLICY_BINARY_PATH_RESOLVED"
+        exit 1
+    fi
+    
     # Run Python pipeline
     echo "Delegating to run_pipeline.py..."
     echo ""
@@ -275,7 +332,9 @@ case "$SKILL" in
         fi
         
         if [ -z "$PROMPT" ]; then
-            PROMPT="Read the goal from /workspace/data/${OUTPUT_DIR}/goals/${GOAL_FILE} and generate requirements in /workspace/data/${OUTPUT_DIR}/"
+            PROMPT="Read the goal from /workspace/data/${OUTPUT_DIR}/goals/${GOAL_FILE} and generate requirements in /workspace/data/${OUTPUT_DIR}/
+
+CRITICAL: You MUST strictly follow ALL instructions in the step1-requirement skill without deviation."
         fi
         ;;
         
@@ -305,7 +364,9 @@ case "$SKILL" in
         fi
         
         if [ -z "$PROMPT" ]; then
-            PROMPT="Read requirements from /workspace/data/${OUTPUT_DIR}/${POLICY_DIR}/requirement.txt and generate policy files in /workspace/data/${OUTPUT_DIR}/${POLICY_DIR}/ using knowledge from /.opencode/skills/terraform-policy-agent-skill/"
+            PROMPT="Read requirements from /workspace/data/${OUTPUT_DIR}/${POLICY_DIR}/requirement.txt and generate policy files in /workspace/data/${OUTPUT_DIR}/${POLICY_DIR}/
+
+CRITICAL: You MUST strictly follow ALL instructions in the step2-generation skill without deviation."
         fi
         ;;
         
@@ -392,7 +453,18 @@ DATA_DIR_RESOLVED=$(resolve_path "$DATA_DIR" "directory")
 
 # Create data directories on host
 mkdir -p "${DATA_DIR_RESOLVED}/${INPUT_DIR}"
-mkdir -p "${DATA_DIR_RESOLVED}/${OUTPUT_DIR}"
+
+OUTPUT_DIR_HOST="${DATA_DIR_RESOLVED}/${OUTPUT_DIR}"
+# Check if OUTPUT_DIR is empty for step0-extraction (unless called from run_pipeline.py)
+if [ "$SKILL" = "step0-extraction" ] && [ "${SKIP_OUTPUT_DIR_CHECK:-}" != "1" ]; then
+    if [ -d "${OUTPUT_DIR_HOST}" ] && [ -n "$(find "${OUTPUT_DIR_HOST}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+        echo "ERROR: OUTPUT_DIR already exists and is not empty: ${OUTPUT_DIR_HOST}"
+        echo "Please set a new OUTPUT_DIR in .env."
+        exit 1
+    fi
+fi
+
+mkdir -p "${OUTPUT_DIR_HOST}"
 
 # Container-side input and output directory paths
 CONTAINER_INPUT_DIR="/workspace/data/${INPUT_DIR}"

@@ -85,6 +85,9 @@ class PipelineExecutor:
         self.stage3_timeout_base = int(os.getenv("STAGE3_TIMEOUT_BASE", "180"))  # 3 minutes base
         self.stage3_timeout_per_policy = int(os.getenv("STAGE3_TIMEOUT_PER_POLICY", "60"))  # 1 minute per policy
         
+        # Container configuration
+        self.container_prefix = os.getenv("CONTAINER_PREFIX", "terraform-pac-agent-skills")
+        
         # Track running containers for cleanup
         self.running_containers: Set[str] = set()
         self.cleanup_registered = False
@@ -94,24 +97,30 @@ class PipelineExecutor:
     
     def _validate_environment(self):
         """Validate required environment variables and directories"""
-        # Validate based on AUTH_PROVIDER
-        if self.auth_provider == "github-copilot":
-            # GitHub Copilot requires MODEL_NAME and OAuth tokens
-            if not self.model_name:
-                raise ValueError("MODEL_NAME environment variable is not set (required for GitHub Copilot)")
-            if not self.github_copilot_access_token:
-                raise ValueError("GITHUB_COPILOT_ACCESS_TOKEN environment variable is not set (required for GitHub Copilot)")
-        else:
-            # LiteLLM requires MODEL_BASE_URL, MODEL_API_KEY, and MODEL_NAME
-            if not self.model_base_url:
-                raise ValueError("MODEL_BASE_URL environment variable is not set (required for LiteLLM)")
-            if not self.model_api_key:
-                raise ValueError("MODEL_API_KEY environment variable is not set (required for LiteLLM)")
-            if not self.model_name:
-                raise ValueError("MODEL_NAME environment variable is not set (required for LiteLLM)")
+        # Note: Environment variable validation (AUTH_PROVIDER, MODEL_*, binary paths)
+        # is handled by run.sh before calling this script.
+        # This avoids duplication and keeps validation logic in one place.
         
-        # Create directories
+        # Create input directory
         self.input_dir.mkdir(parents=True, exist_ok=True)
+        
+        # OUTPUT_DIR must not contain existing artifacts when starting from stage 0/full pipeline
+        stage_arg = next((arg for arg in sys.argv[1:] if arg == "--step"), None)
+        stage_value = None
+        if stage_arg:
+            try:
+                stage_index = sys.argv.index("--step")
+                stage_value = sys.argv[stage_index + 1]
+            except (ValueError, IndexError):
+                stage_value = None
+        
+        should_validate_output_dir = stage_value in (None, "0")
+        if should_validate_output_dir and self.output_dir.exists() and any(self.output_dir.iterdir()):
+            raise ValueError(
+                f"OUTPUT_DIR already exists and is not empty: {self.output_dir}. "
+                "Please set a new OUTPUT_DIR in .env."
+            )
+        
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.goals_dir.mkdir(parents=True, exist_ok=True)
         
@@ -193,9 +202,9 @@ class PipelineExecutor:
             cmd.extend(["--prompt", prompt])
         
         # Set unique container name for parallel execution
-        container_name = "terraform-pac-agent-skills"
+        container_name = self.container_prefix
         if container_suffix:
-            container_name = f"terraform-pac-agent-skills-{container_suffix}"
+            container_name = f"{self.container_prefix}-{container_suffix}"
         
         log_handle = None
         try:
@@ -214,6 +223,9 @@ class PipelineExecutor:
             # Set environment with container name
             env = os.environ.copy()
             env['CONTAINER_NAME'] = container_name
+            # Skip OUTPUT_DIR empty check when called from run_pipeline.py
+            # (run_pipeline.py creates log files in OUTPUT_DIR before calling run.sh)
+            env['SKIP_OUTPUT_DIR_CHECK'] = '1'
             
             # Track this container
             self.running_containers.add(container_name)
@@ -674,6 +686,7 @@ class PipelineExecutor:
         print("Terraform Policy Automation Agent Skills - Full Pipeline")
         print("="*80)
         print(f"Model: {self.model_name}")
+        print(f"Container Prefix: {self.container_prefix}")
         print(f"Input: {self.input_dir}/{os.getenv('INPUT_FILE', 'policy_goal.txt')}")
         print(f"Max Workers: {self.max_workers}")
         print("="*80 + "\n")
@@ -723,10 +736,6 @@ def main():
         executor = PipelineExecutor(script_dir)
     except ValueError as e:
         print(f"❌ Configuration error: {e}")
-        print("\nPlease set the following environment variables:")
-        print("  export MODEL_BASE_URL='https://your-litellm-endpoint.com'")
-        print("  export MODEL_API_KEY='sk-your-api-key'")
-        print("  export MODEL_NAME='aws/claude-sonnet-4-5'")
         sys.exit(1)
     
     # Execute full pipeline
