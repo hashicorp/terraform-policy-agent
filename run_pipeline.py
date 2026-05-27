@@ -387,6 +387,132 @@ class PipelineExecutor:
             self.running_containers.discard(container_name)
             return False
     
+    def _verify_stage0_output(self) -> bool:
+        """Verify that Stage 0 produced expected output files."""
+        goals_dir = self.goals_dir
+        
+        if not goals_dir.exists():
+            print(f"  ✗ Verification failed: Goals directory not created: {goals_dir}")
+            return False
+        
+        goal_files = sorted([f for f in goals_dir.iterdir() if f.name.startswith("goal-") and f.name.endswith(".txt")])
+        if not goal_files:
+            print(f"  ✗ Verification failed: No goal files found in {goals_dir}")
+            return False
+        
+        print(f"  ✓ Verification passed: {len(goal_files)} goal file(s) created")
+        return True
+    
+    def _identify_policy_directory_for_goal(self, goal_file: Path, log_file: Optional[Path] = None) -> Optional[Path]:
+        """Identify which policy directory was created for a given goal file.
+        
+        Uses a multi-stage approach:
+        1. Grep policy directory names in goal file content
+        2. If that fails, grep in log file
+        3. Return None if identification fails
+        
+        Args:
+            goal_file: Path to the goal file
+            log_file: Path to the log file (optional)
+            
+        Returns:
+            Path to the policy directory, or None if not identified
+        """
+        if not self.output_dir.exists():
+            return None
+        
+        # Get all policy directories
+        policy_dirs = [d for d in self.output_dir.iterdir()
+                      if d.is_dir() and not d.name.startswith('.') and d.name != 'goals']
+        
+        if not policy_dirs:
+            return None
+        
+        # Step 1: Search in goal file content
+        try:
+            goal_content = goal_file.read_text()
+            matches = []
+            for policy_dir in policy_dirs:
+                if policy_dir.name in goal_content:
+                    matches.append(policy_dir)
+            
+            if len(matches) == 1:
+                return matches[0]
+        except Exception:
+            pass
+        
+        # Step 2: Search in log file if provided
+        if log_file and log_file.exists():
+            try:
+                log_content = log_file.read_text()
+                matches = []
+                for policy_dir in policy_dirs:
+                    if policy_dir.name in log_content:
+                        matches.append(policy_dir)
+                
+                if len(matches) == 1:
+                    return matches[0]
+            except Exception:
+                pass
+        
+        # Step 3: Could not identify uniquely
+        return None
+    
+    def _verify_policy_directory(self, policy_dir: Path) -> bool:
+        """Verify that a policy directory has required files.
+        
+        Args:
+            policy_dir: Path to the policy directory
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        requirement_file = policy_dir / "requirement.txt"
+        report_file = policy_dir / "report.md"
+        
+        if not requirement_file.exists():
+            return False
+        
+        if not report_file.exists():
+            return False
+        
+        return True
+    
+    def _verify_stage2_output(self, policy_dir: Path) -> bool:
+        """Verify that Stage 2 produced expected output files for a policy."""
+        policy_name = policy_dir.name
+        
+        # Check for policy file (.policy.hcl)
+        policy_files = list(policy_dir.glob("*.policy.hcl"))
+        if not policy_files:
+            print(f"  ✗ Verification failed: No .policy.hcl file found in {policy_name}")
+            return False
+        
+        # Check for test file (.policytest.hcl)
+        test_files = list(policy_dir.glob("*.policytest.hcl"))
+        if not test_files:
+            print(f"  ✗ Verification failed: No .policytest.hcl file found in {policy_name}")
+            return False
+        
+        print(f"  ✓ Verification passed: Policy and test files created for {policy_name}")
+        return True
+    
+    def _verify_stage3_output(self) -> bool:
+        """Verify that Stage 3 produced expected output files."""
+        summary_json = self.output_dir / "summary.json"
+        summary_md = self.output_dir / "summary.md"
+        
+        if not summary_json.exists():
+            print(f"  ✗ Verification failed: summary.json not found")
+            return False
+        
+        if not summary_md.exists():
+            print(f"  ✗ Verification failed: summary.md not found")
+            return False
+        
+        print(f"  ✓ Verification passed: Summary files created")
+        return True
+    
     def stage0_extraction(self) -> bool:
         """Stage 0: Extract individual goals from policy descriptions"""
         # Read INPUT_FILE from environment (default: "policy_goal.txt")
@@ -420,7 +546,15 @@ class PipelineExecutor:
             skill_args=[]  # No arguments needed, INPUT_FILE from .env
         )
         
-        return success
+        if not success:
+            return False
+        
+        # Verify output even if exit code was 0
+        if not self._verify_stage0_output():
+            print("\n❌ Stage 0 output verification failed")
+            return False
+        
+        return True
     
     def _run_single_requirement(self, goal_file: Path, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
         """
@@ -453,7 +587,71 @@ class PipelineExecutor:
             skill_args=["--goal-file", goal_file.name]
         )
         
-        return (goal_name, success, "" if success else "Execution failed")
+        if not success:
+            # Append failure reason to log file
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"[run_pipeline.py] Docker execution failed\n")
+                f.write(f"{'='*80}\n")
+            return (goal_name, False, "Execution failed")
+        
+        # Try to identify which policy directory was created for this goal
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"[run_pipeline.py] Post-execution verification\n")
+            f.write(f"{'='*80}\n")
+        
+        policy_dir = self._identify_policy_directory_for_goal(goal_file, log_file)
+        
+        if policy_dir:
+            # Log identified directory
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"✓ Identified policy directory: {policy_dir.name}\n")
+            
+            # Verify the identified directory has required files
+            if not self._verify_policy_directory(policy_dir):
+                # Directory is incomplete - delete it for retry
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"✗ Policy directory is incomplete (missing required files)\n")
+                    f.write(f"  Required files: requirement.txt, report.md\n")
+                
+                try:
+                    import shutil
+                    shutil.rmtree(policy_dir)
+                    msg = f"✓ Removed incomplete directory: {policy_dir.name}\n"
+                    print(f"  ⚠️  {msg.strip()}")
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(msg)
+                except Exception as e:
+                    msg = f"✗ Could not remove directory {policy_dir.name}: {e}\n"
+                    print(f"  ⚠️  {msg.strip()}")
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(msg)
+                
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"\n{'='*80}\n")
+                    f.write(f"[run_pipeline.py] Result: FAILED - Will retry\n")
+                    f.write(f"{'='*80}\n")
+                
+                return (goal_name, False, f"Policy directory {policy_dir.name} missing required files")
+            else:
+                # Directory is complete
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"✓ Policy directory verification passed\n")
+                    f.write(f"\n{'='*80}\n")
+                    f.write(f"[run_pipeline.py] Result: SUCCESS\n")
+                    f.write(f"{'='*80}\n")
+        else:
+            # Could not identify the policy directory
+            # This is not necessarily an error - verification will happen at the end of stage1
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"⚠ Could not identify policy directory from log\n")
+                f.write(f"  (Will be verified at the end of stage1)\n")
+                f.write(f"\n{'='*80}\n")
+                f.write(f"[run_pipeline.py] Result: SUCCESS (pending final verification)\n")
+                f.write(f"{'='*80}\n")
+        
+        return (goal_name, True, "")
     
     def stage1_requirement(self) -> bool:
         """Stage 1: Generate requirements for all goals (parallel execution with priority retry)"""
@@ -552,6 +750,49 @@ class PipelineExecutor:
         
         print(f"\n✅ Stage 1 completed: {completed} succeeded, {failed} failed\n")
         
+        # Final verification: Check all policy directories for completeness
+        # This catches cases where directories were created but files were deleted (e.g., by post-hooks)
+        print("Performing final verification of policy directories...")
+        
+        if self.output_dir.exists():
+            policy_dirs = [d for d in self.output_dir.iterdir()
+                          if d.is_dir() and not d.name.startswith('.') and d.name != 'goals']
+            
+            incomplete_dirs = []
+            for policy_dir in policy_dirs:
+                if not self._verify_policy_directory(policy_dir):
+                    incomplete_dirs.append(policy_dir)
+            
+            if incomplete_dirs:
+                print(f"\n⚠️  Found {len(incomplete_dirs)} incomplete policy director{'y' if len(incomplete_dirs) == 1 else 'ies'}:")
+                
+                # Try to identify which goals these directories belong to
+                for policy_dir in incomplete_dirs:
+                    # Try to find the corresponding goal
+                    goal_identified = False
+                    for goal_file in goal_files:
+                        identified_dir = self._identify_policy_directory_for_goal(goal_file)
+                        if identified_dir and identified_dir == policy_dir:
+                            goal_name = goal_file.stem
+                            print(f"  - {policy_dir.name} (from {goal_file.name})")
+                            
+                            # Mark this goal as failed if it was previously successful
+                            with results_lock:
+                                if goal_name in results and results[goal_name][0]:
+                                    # Was marked as success, but directory is incomplete
+                                    results[goal_name] = (False, f"Policy directory {policy_dir.name} missing required files")
+                                    completed -= 1
+                                    failed += 1
+                            
+                            goal_identified = True
+                            break
+                    
+                    if not goal_identified:
+                        print(f"  - {policy_dir.name} (could not identify source goal)")
+                
+                print(f"\n❌ Stage 1 final status: {completed} succeeded, {failed} failed\n")
+                return False
+        
         return failed == 0
     
     def _run_single_generation(self, policy_dir: str, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
@@ -584,7 +825,15 @@ class PipelineExecutor:
             skill_args=["--policy-dir", policy_dir]
         )
         
-        return (policy_dir, success, "" if success else "Execution failed")
+        if not success:
+            return (policy_dir, False, "Execution failed")
+        
+        # Verify output even if exit code was 0
+        policy_path = self.output_dir / policy_dir
+        if not self._verify_stage2_output(policy_path):
+            return (policy_dir, False, "Output verification failed")
+        
+        return (policy_dir, True, "")
     
     def stage2_generation(self) -> bool:
         """Stage 2: Generate policies and tests (parallel execution with priority retry)"""
@@ -709,7 +958,15 @@ class PipelineExecutor:
             timeout_seconds=timeout_seconds
         )
         
-        return success
+        if not success:
+            return False
+        
+        # Verify output even if exit code was 0
+        if not self._verify_stage3_output():
+            print("\n❌ Stage 3 output verification failed")
+            return False
+        
+        return True
     
     def run_full_pipeline(self) -> bool:
         """
