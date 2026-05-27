@@ -29,6 +29,7 @@ import subprocess
 import time
 import signal
 import atexit
+import re
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -167,6 +168,35 @@ class PipelineExecutor:
         
         print("✅ Cleanup complete\n")
     
+    def _clean_log_line(self, line: str) -> str:
+        """
+        Clean log line by removing ANSI escape sequences and excessive whitespace
+        
+        Args:
+            line: Raw log line from Docker output
+        
+        Returns:
+            Cleaned log line
+        """
+        # Remove ANSI escape sequences (color codes, cursor movements, etc.)
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        cleaned = ansi_escape.sub('', line)
+        
+        # Remove carriage returns that might cause overwriting
+        cleaned = cleaned.replace('\r', '')
+        
+        # Replace excessive spaces (more than 2 consecutive spaces) with single space
+        # but preserve leading indentation
+        if cleaned.strip():  # Only process non-empty lines
+            # Count leading spaces
+            leading_spaces = len(cleaned) - len(cleaned.lstrip(' '))
+            # Clean the rest of the line
+            rest = cleaned.lstrip(' ')
+            rest = re.sub(r' {3,}', ' ', rest)
+            cleaned = ' ' * leading_spaces + rest
+        
+        return cleaned
+    
     def _run_docker_command(
         self,
         skill: str,
@@ -288,10 +318,13 @@ class PipelineExecutor:
                     if process.stdout:
                         remaining = process.stdout.read()
                         if remaining:
+                            # Clean remaining output
+                            cleaned_remaining = self._clean_log_line(remaining)
+                            
                             if verbose:
-                                print(remaining, end='')
+                                print(cleaned_remaining, end='')
                             if log_handle:
-                                log_handle.write(remaining)
+                                log_handle.write(cleaned_remaining)
                                 log_handle.flush()
                     break
                 
@@ -302,11 +335,14 @@ class PipelineExecutor:
                     if ready:
                         line = process.stdout.readline()
                         if line:
+                            # Clean the line before writing
+                            cleaned_line = self._clean_log_line(line)
+                            
                             # Write to log file (and optionally console)
                             if verbose:
-                                print(line, end='')
+                                print(cleaned_line, end='')
                             if log_handle:
-                                log_handle.write(line)
+                                log_handle.write(cleaned_line)
                                 log_handle.flush()
             
             # Get the return code (process has already finished)
