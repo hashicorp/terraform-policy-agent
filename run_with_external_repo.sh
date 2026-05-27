@@ -221,18 +221,20 @@ if [ "$RUN_PREPROCESS" = true ]; then
             SENTINEL_COUNT=$((SENTINEL_COUNT + 1))
             echo "✓ Copied: $relative_path"
             
-            # Check for mock files in test directory
-            mock_dir="$sentinel_dir/test/$sentinel_basename"
-            if [ -d "$mock_dir" ]; then
-                # Copy mock directory
-                relative_mock_path="${mock_dir#$EXTERNAL_REPO_DIR/}"
-                target_mock_dir="$SENTINELS_DIR/$relative_mock_path"
-                
-                mkdir -p "$target_mock_dir"
-                cp -r "$mock_dir"/* "$target_mock_dir/" 2>/dev/null || true
-                
-                if [ "$(ls -A "$target_mock_dir" 2>/dev/null)" ]; then
-                    echo "  ✓ Copied mock files: $relative_mock_path"
+            # Check for mock files in test directory (only if feature flag is enabled)
+            if [ "${ENABLE_SENTINEL_MOCK_USE:-false}" = "true" ]; then
+                mock_dir="$sentinel_dir/test/$sentinel_basename"
+                if [ -d "$mock_dir" ]; then
+                    # Copy mock directory
+                    relative_mock_path="${mock_dir#$EXTERNAL_REPO_DIR/}"
+                    target_mock_dir="$SENTINELS_DIR/$relative_mock_path"
+                    
+                    mkdir -p "$target_mock_dir"
+                    cp -r "$mock_dir"/* "$target_mock_dir/" 2>/dev/null || true
+                    
+                    if [ "$(ls -A "$target_mock_dir" 2>/dev/null)" ]; then
+                        echo "  ✓ Copied mock files: $relative_mock_path"
+                    fi
                 fi
             fi
         fi
@@ -281,16 +283,21 @@ if [ "$RUN_PREPROCESS" = true ]; then
         relative_path="${sentinel_file#$SENTINELS_DIR/}"
         sentinel_line="./data/${INPUT_DIR_NAME}/sentinels/$relative_path"
         
-        # Check if mock directory exists for this sentinel
-        sentinel_basename=$(basename "$sentinel_file" .sentinel)
-        sentinel_dir=$(dirname "$sentinel_file")
-        mock_dir="$sentinel_dir/test/$sentinel_basename"
-        
-        if [ -d "$mock_dir" ] && [ "$(ls -A "$mock_dir" 2>/dev/null)" ]; then
-            # Mock directory exists and is not empty
-            relative_mock_path="${mock_dir#$SENTINELS_DIR/}"
-            echo "- ${sentinel_line}, Mock Files: ./data/${INPUT_DIR_NAME}/sentinels/$relative_mock_path" >> "$POLICY_GOAL_FILE"
+        # Check if mock directory exists for this sentinel (only if feature flag is enabled)
+        if [ "${ENABLE_SENTINEL_MOCK_USE:-false}" = "true" ]; then
+            sentinel_basename=$(basename "$sentinel_file" .sentinel)
+            sentinel_dir=$(dirname "$sentinel_file")
+            mock_dir="$sentinel_dir/test/$sentinel_basename"
+            
+            if [ -d "$mock_dir" ] && [ "$(ls -A "$mock_dir" 2>/dev/null)" ]; then
+                # Mock directory exists and is not empty
+                relative_mock_path="${mock_dir#$SENTINELS_DIR/}"
+                echo "- ${sentinel_line}, Mock Files: ./data/${INPUT_DIR_NAME}/sentinels/$relative_mock_path" >> "$POLICY_GOAL_FILE"
+            else
+                echo "- ${sentinel_line}" >> "$POLICY_GOAL_FILE"
+            fi
         else
+            # Feature flag disabled, don't include mock files
             echo "- ${sentinel_line}" >> "$POLICY_GOAL_FILE"
         fi
     done < <(find "$SENTINELS_DIR" -type f -name "*.sentinel" -print0 | sort -z)
