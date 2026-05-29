@@ -942,7 +942,6 @@ class PipelineExecutor:
         print(f"Stage 3: Summary Generation")
         print(f"{'='*80}\n")
         
-        prompt = "Collect results from all policies in /workspace/data/output/ and generate summary in /workspace/data/output/"
         log_file = self.output_dir / "stage3_summary.log"
         
         # Count policy directories to calculate dynamic timeout
@@ -952,7 +951,7 @@ class PipelineExecutor:
         
         success = self._run_docker_command(
             skill="step3-summary",
-            prompt=prompt,
+            prompt="",
             stage_name="Stage 3: Summary Generation",
             log_file=log_file,
             timeout_seconds=timeout_seconds
