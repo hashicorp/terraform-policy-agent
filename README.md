@@ -33,7 +33,7 @@ docker login icr.io -u iamapikey
 # When prompted, enter your API key
 
 # Pull the image
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.16-fix3
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.16-fix4
 ```
 
 **Required Binaries**:
@@ -86,7 +86,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.16-fix3-rc1
+IMAGE_TAG=0.0.16-fix4
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
