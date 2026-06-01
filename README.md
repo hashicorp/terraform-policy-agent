@@ -31,7 +31,7 @@ docker login icr.io -u iamapikey
 # When prompted, enter your API key
 
 # Pull the image
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.16-fix2
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.16-fix3
 ```
 
 **Required Binaries**:
@@ -84,7 +84,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.19-rc1
+IMAGE_TAG=0.0.16-fix3-rc1
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
@@ -271,38 +271,44 @@ You can also use the packaged skill with a coding agent instead of running comma
 
 ### 1. Place the skill in your agent's skill directory
 
-For example, with OpenCode, place the skill under `.opencode/skills/`.
+Place the skill in the appropriate directory for your coding agent:
 
-Example:
-
+**For OpenCode:**
 ```bash
 mkdir -p .opencode/skills
-cp -R skills/operating-terraform-pac-agent .opencode/skills/
+cp -R skills/tfpac-setup .opencode/skills/
 ```
 
-### 2. Start OpenCode with your preferred provider and model
+**For VSCode Copilot:**
+```bash
+mkdir -p .github/skills
+cp -R skills/tfpac-setup .github/skills/
+```
 
-Configure OpenCode to use your LLM provider and model as usual.
+### 2. Start your coding agent with your preferred provider and model
+
+Configure your coding agent (OpenCode or VSCode Copilot) to use your LLM provider and model as usual.
 
 ### 3. Open the skills menu and select the skill
 
-In OpenCode:
+In your coding agent:
 
 - type `/skills`
-- select `operating-terraform-pac-agent`
+- select `tfpac-setup`
 
 The skill will then guide the workflow in this order:
 
-1. prerequisite check
-2. pipeline run
-3. output verification
+1. **Input setup assistance**
+   - Help create `.env` file from `.env.example`
+   - Guide creation of `data/input/policy_goal.txt`
+   - Assist with placing Sentinel files in `data/input/sentinels/` if needed
+2. **Prerequisite check**
+   - Verify Docker image availability
+   - Check required binaries (terraform, tfpolicy)
+   - Validate MCP server connection
+3. **Pipeline run**
+   - Show how to execute the conversion pipeline with `./run.sh` or `./run_with_external_repo.sh`
 
-It will also:
-- ask whether to run in foreground or background
-- ask how to handle existing `data/input` or `data/output` contents before running
-- help you inspect generated artifacts after the pipeline completes
-- help present results in a readable table
-- help answer follow-up questions about the generated policies and outputs
 
 ## Advanced Usage
 
