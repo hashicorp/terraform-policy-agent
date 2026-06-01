@@ -21,6 +21,8 @@ sample-data/        run_pipeline.py     skills/
 
 ### 2. Prerequisites
 
+The agent runs in a container, so you'll need `docker` available on your system.
+
 **Docker Image**:
 
 Pull the pre-built Docker image from the registry:
