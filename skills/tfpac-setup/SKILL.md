@@ -10,7 +10,7 @@ description: Guide users through an interactive wizard to create a `.env` file f
 - Access to the project root directory (`terraform-policy-agent`)
 - Ability to read `.env.example` file (if exists)
 - Ability to write `.env` file to project root
-- Access to `skills/operating-terraform-pac-agent/scripts/dotenv_tool.py` for secure .env file handling
+- Access to `skills/tfpac-setup/dotenv_tool.py` for secure .env file handling
 
 ## Workflow Overview
 
@@ -36,7 +36,7 @@ This wizard supports two different workflows:
 
 **Always use the dotenv_tool.py script to load existing .env files:**
 ```bash
-python3 skills/operating-terraform-pac-agent/scripts/dotenv_tool.py .env
+python3 skills/tfpac-setup/dotenv_tool.py .env
 ```
 
 This script automatically masks sensitive values (API keys, tokens) before displaying them, preventing secrets from being exposed to the LLM. The tool identifies and masks the following secret variables:
@@ -149,13 +149,74 @@ Ask: "Which authentication provider do you want to use?"
      - `MODEL_NAME` (default: "aws/claude-sonnet-4-5")
      - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly.
 
-2. **GitHub Copilot**
+2. **GitHub Copilot CLI**
    - Set `AUTH_PROVIDER=github-copilot`
    - Ask for:
      - `MODEL_NAME` (default: "claude-sonnet-4.6")
-     - `GITHUB_COPILOT_ACCESS_TOKEN` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation (note: "Find in ~/.local/share/opencode/auth.json")
-     - Optional: `GITHUB_COPILOT_REFRESH_TOKEN` - If user wants to set it, tell them to manually fill it in the .env file
-     - Optional: `GITHUB_COPILOT_EXPIRES` (default: "0", if refresh token is set)
+   
+   **Then show GitHub Copilot CLI token acquisition guide:**
+   
+   ```
+   🔐 How to Obtain GitHub Copilot Tokens
+   
+   To run this project, you need GitHub Copilot authentication tokens.
+   
+   ### Recommended Method: Safe Token Acquisition Using Docker Container ✨
+   
+   No need to install anything on your host machine - everything is self-contained in the project's container.
+   
+   **Step 1: Run the following command**
+   ```bash
+   docker run --rm -it --entrypoint "" \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.19 \
+     sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
+   ```
+   
+   **Step 2: Follow the on-screen instructions**
+   - A URL and code will be displayed (e.g., `https://github.com/login/device` and `XXXX-XXXX`)
+   - Open the URL in your browser and enter the code
+   - Authorize GitHub Copilot access
+   
+   **Step 3: Copy the tokens**
+   After authentication completes, tokens will be displayed in JSON format:
+   ```json
+   {
+     "access_token": "ghu_xxxxxxxxxxxx",
+     "refresh_token": "ghu_xxxxxxxxxxxx",
+     "expires": 1234567890
+   }
+   ```
+   
+   **Step 4: Paste into .env file**
+   Later, you'll paste these values into the generated `.env` file:
+   ```
+   GITHUB_COPILOT_ACCESS_TOKEN=ghu_xxxxxxxxxxxx
+   GITHUB_COPILOT_REFRESH_TOKEN=ghu_xxxxxxxxxxxx
+   GITHUB_COPILOT_EXPIRES=1234567890
+   ```
+   
+   ---
+   
+   ### Alternative Method: Using OpenCode on Host Machine
+   
+   If you already have OpenCode installed:
+   ```bash
+   opencode auth login
+   cat ~/.local/share/opencode/auth.json
+   ```
+   
+   ---
+   
+   **💡 Why Use the Docker Container?**
+   - No need to install additional software on your host machine
+   - Completely isolated from your project environment
+   - Used only for obtaining credentials, then immediately removed (`--rm` flag)
+   - Authenticates in the same environment as the container used by this project
+   ```
+   
+   - `GITHUB_COPILOT_ACCESS_TOKEN` - Tell user to manually fill this in the .env file after generation
+   - Optional: `GITHUB_COPILOT_REFRESH_TOKEN` - Tell user to manually fill this in the .env file
+   - Optional: `GITHUB_COPILOT_EXPIRES` - Tell user to manually fill this in the .env file (default: "0")
 
 3. **Skip (configure manually later)**
    - Don't set authentication variables

@@ -21,6 +21,8 @@ sample-data/        run_pipeline.py     skills/
 
 ### 2. Prerequisites
 
+The agent runs in a container, so you'll need `docker` available on your system.
+
 **Docker Image**:
 
 Pull the pre-built Docker image from the registry:
@@ -29,7 +31,7 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.19
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.20
 ```
 
 **Required Binaries**:
@@ -59,19 +61,69 @@ cp .env.example .env
 # Edit .env with your configuration
 ```
 
-Example `.env`:
+#### Authentication Configuration
+
+Choose one of the following authentication providers:
+
+**Option A: LiteLLM (Default)**
+
 ```bash
-# Authentication (choose one)
 AUTH_PROVIDER=litellm
 MODEL_BASE_URL=https://your-litellm-endpoint.com
 MODEL_NAME=aws/claude-sonnet-4-5
 MODEL_API_KEY=sk-your-litellm-api-key
+```
 
-# AUTH_PROVIDER=github-copilot
-# MODEL_NAME=claude-sonnet-4.6
-# GITHUB_COPILOT_ACCESS_TOKEN=gho_your_access_token
-# GITHUB_COPILOT_REFRESH_TOKEN=gho_your_refresh_token  # Optional
-# GITHUB_COPILOT_EXPIRES=0  # Optional
+- `AUTH_PROVIDER`: Set to `litellm`
+- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
+- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
+- `MODEL_API_KEY`: Your LiteLLM API key
+
+**Option B: GitHub Copilot**
+
+```bash
+AUTH_PROVIDER=github-copilot
+MODEL_NAME=claude-sonnet-4.6
+GITHUB_COPILOT_ACCESS_TOKEN=gho_your_access_token
+GITHUB_COPILOT_REFRESH_TOKEN=gho_your_refresh_token  # Optional, defaults to access token
+GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
+```
+
+- `AUTH_PROVIDER`: Set to `github-copilot`
+- `MODEL_NAME`: Model identifier (e.g., `claude-sonnet-4.6`)
+- `GITHUB_COPILOT_ACCESS_TOKEN`: Your GitHub Copilot access token
+- `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
+- `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
+
+**How to get GitHub Copilot tokens:**
+
+1. Run `opencode auth login` and select GitHub Copilot
+2. Choose deployment type (usually GitHub.com)
+3. Follow the browser authentication flow with the displayed URL and code
+4. After successful login, tokens are saved in `~/.local/share/opencode/auth.json`
+
+You can also obtain tokens directly using the container:
+
+```bash
+docker run --rm -it --entrypoint "" icr.io/polaris-20251120/terraform-pac-agent:0.0.20 sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
+```
+
+This will:
+- Launch the OpenCode authentication flow
+- Prompt you to select GitHub Copilot as the provider
+- Display a login URL (e.g., `https://github.com/login/device`) and code
+- After you authorize in your browser, display the tokens from `auth.json`
+
+**Note:** The terraform-pac-agent container runs OpenCode internally, so it can perform the same authentication process inside the container. The container will automatically create `auth.json` from the environment variables you set in `.env`.
+
+#### Complete `.env` Example
+
+```bash
+# Authentication (choose one option above)
+AUTH_PROVIDER=litellm
+MODEL_BASE_URL=https://your-litellm-endpoint.com
+MODEL_NAME=aws/claude-sonnet-4-5
+MODEL_API_KEY=sk-your-litellm-api-key
 
 # Data directories
 DATA_DIR=./data  # Create this from sample-data/ or your own structure
@@ -82,7 +134,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.19
+IMAGE_TAG=0.0.20
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
@@ -269,38 +321,44 @@ You can also use the packaged skill with a coding agent instead of running comma
 
 ### 1. Place the skill in your agent's skill directory
 
-For example, with OpenCode, place the skill under `.opencode/skills/`.
+Place the skill in the appropriate directory for your coding agent:
 
-Example:
-
+**For OpenCode:**
 ```bash
 mkdir -p .opencode/skills
-cp -R skills/operating-terraform-pac-agent .opencode/skills/
+cp -R skills/tfpac-setup .opencode/skills/
 ```
 
-### 2. Start OpenCode with your preferred provider and model
+**For GitHub Copilot CLI:**
+```bash
+mkdir -p .github/skills
+cp -R skills/tfpac-setup .github/skills/
+```
 
-Configure OpenCode to use your LLM provider and model as usual.
+### 2. Start your coding agent with your preferred provider and model
+
+Configure your coding agent (OpenCode or GitHub Copilot CLI) to use your LLM provider and model as usual.
 
 ### 3. Open the skills menu and select the skill
 
-In OpenCode:
+In your coding agent:
 
 - type `/skills`
-- select `operating-terraform-pac-agent`
+- select `tfpac-setup`
 
 The skill will then guide the workflow in this order:
 
-1. prerequisite check
-2. pipeline run
-3. output verification
+1. **Input setup assistance**
+   - Help create `.env` file from `.env.example`
+   - Guide creation of `data/input/policy_goal.txt`
+   - Assist with placing Sentinel files in `data/input/sentinels/` if needed
+2. **Prerequisite check**
+   - Verify Docker image availability
+   - Check required binaries (terraform, tfpolicy)
+   - Validate MCP server connection
+3. **Pipeline run**
+   - Show how to execute the conversion pipeline with `./run.sh` or `./run_with_external_repo.sh`
 
-It will also:
-- ask whether to run in foreground or background
-- ask how to handle existing `data/input` or `data/output` contents before running
-- help you inspect generated artifacts after the pipeline completes
-- help present results in a readable table
-- help answer follow-up questions about the generated policies and outputs
 
 ## Advanced Usage
 
