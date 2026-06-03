@@ -31,7 +31,7 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.20
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.21
 ```
 
 **Required Binaries**:
@@ -105,7 +105,7 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 You can also obtain tokens directly using the container:
 
 ```bash
-docker run --rm -it --entrypoint "" icr.io/polaris-20251120/terraform-pac-agent:0.0.20 sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
+docker run --rm -it --entrypoint "" icr.io/polaris-20251120/terraform-pac-agent:0.0.21 sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
 This will:
@@ -134,7 +134,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.20
+IMAGE_TAG=0.0.21
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
@@ -208,13 +208,17 @@ Generate TF Policy for
 ./run.sh
 ```
 
-Output files will be generated under `data/output`:
+**Output:**
+
+When using `run.sh`, output files are generated in the directory specified by `OUTPUT_DIR` in your `.env` file (default: `data/output`):
 
 ```sh
-$ ls ./workspace/data/output
+$ ls ./data/output
 CloudFront_Associated_WAF   goals                   summary.json
 stage0_extraction.log       stage3_summary.log      summary.md
 ```
+
+**Important:** The `OUTPUT_DIR` must be empty before running the full pipeline to prevent accidental overwrites. If you need to run multiple conversions, set a different `OUTPUT_DIR` in `.env` for each run (e.g., `OUTPUT_DIR=output-v2`, `OUTPUT_DIR=results-20260603`).
 
 ### 7. Run with External Repository (Alternative)
 
@@ -252,7 +256,13 @@ EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/poli
 
 **Output:**
 
-Intermediate files will be generated in the `data` directory. The final converted policies will be created under `EXTERNAL_REPO_DIR/tfpolicy`, with each Sentinel policy having a corresponding Terraform policy directory.
+When using `run_with_external_repo.sh`, the script automatically creates timestamped directories for each run:
+- Input: `data/input-YYYYMMDD_HHMMSS/`
+- Output: `data/output-YYYYMMDD_HHMMSS/`
+
+**Note:** The `OUTPUT_DIR` setting in `.env` is **ignored** when using `run_with_external_repo.sh`. This automatic timestamping prevents conflicts when processing multiple batches and allows you to keep historical results.
+
+The final converted policies will be created under `EXTERNAL_REPO_DIR/tfpolicy`, with each Sentinel policy having a corresponding Terraform policy directory.
 
 Example output structure:
 
