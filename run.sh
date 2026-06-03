@@ -474,7 +474,7 @@ echo "=========================================="
 if [ "$DRYRUN" = true ]; then
     echo "Dry-Run Mode: Docker Command"
 else
-    echo "Running OpenCode Skill"
+    echo "Running Terraform PaC Agent Skill"
 fi
 echo "=========================================="
 echo "Skill: ${SKILL}"

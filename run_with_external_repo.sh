@@ -253,8 +253,12 @@ if [ "$RUN_PREPROCESS" = true ]; then
 
     echo ""
     echo "✓ Copied $SENTINEL_COUNT Sentinel files"
-    echo "  Skipped $SKIPPED_COUNT files (already have policy.hcl)"
-    echo "  Skipped $MOCK_COUNT mock files (in test/ directories)"
+    if [ $SKIPPED_COUNT -gt 0 ]; then
+        echo "  Skipped $SKIPPED_COUNT files (already have policy.hcl)"
+    fi
+    if [ $MOCK_COUNT -gt 0 ]; then
+        echo "  Skipped $MOCK_COUNT mock files (in test/ directories)"
+    fi
     echo ""
 
     # Copy and process sentinel.hcl if defined
@@ -374,7 +378,7 @@ if [ "$RUN_GENERATE" = true ]; then
         export OUTPUT_DIR="$OUTPUT_DIR_NAME"
         export INPUT_FILE="policy_goal.txt"
 
-        echo "Running pipeline with OpenCode skills..."
+        echo "Running policy generation pipeline..."
         echo "  Data Dir: $DATA_DIR_ABS"
         echo "  Input:    $INPUT_DIR_NAME"
         echo "  Output:   $OUTPUT_DIR_NAME"
