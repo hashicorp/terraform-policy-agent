@@ -130,13 +130,13 @@ Ask the user for:
 - Question: "What is the path to your Terraform binary?"
 - Default: System-specific (see above)
 - Validation: Must be a valid path
-- Note: "This binary must be executable and match your container architecture"
+- Note: "Terraform CLI is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
 
 **TFPOLICY_BINARY_PATH:**
 - Question: "What is the path to your tfpolicy binary?"
 - Default: System-specific (see above)
 - Validation: Must be a valid path
-- Note: "Download from: https://github.com/hashicorp/terraform-policy/releases"
+- Note: "tfpolicy is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
 
 ### 3. Authentication Provider Configuration
 Ask: "Which authentication provider do you want to use?"
@@ -168,7 +168,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.21 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.22 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -236,7 +236,7 @@ Ask: "Do you want to customize Docker settings?" (default: No)
 
 If yes, ask for:
 - **IMAGE_NAME** (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- **IMAGE_TAG** (default: "0.0.21")
+- **IMAGE_TAG** (default: "0.0.22")
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
 
 ### 6. Timeout Configuration (Optional)

@@ -31,26 +31,56 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.21
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.22
 ```
 
 **Required Binaries**:
 
 Download the following **Linux** binaries (used inside the container). The architecture must match your host machine:
 
-- **Terraform CLI**: Download from [HashiCorp Terraform Releases](https://releases.hashicorp.com/terraform/)
-  - For M1/M2 Mac (ARM64): `terraform_<version>_linux_arm64.zip`
-  - For Intel Mac/Linux (AMD64): `terraform_<version>_linux_amd64.zip`
+- **Terraform CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
+  - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
-- **TFPolicy CLI**: Download from [HashiCorp Terraform Policy Releases](https://github.com/hashicorp/terraform-policy/releases)
-  - For M1/M2 Mac (ARM64): `tfpolicy_<version>_linux_arm64.zip`
-  - For Intel Mac/Linux (AMD64): `tfpolicy_<version>_linux_amd64.zip`
+- **TFPolicy CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
+  - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
 **Required MCP Server**:
 
 - **terraform-mcp-server**: HashiCorp's MCP server for Terraform operations
   - Must be running on `localhost:8500`
-  - Download and setup instructions: [terraform-mcp-server repository](https://github.com/hashicorp/terraform-mcp-server)
+  - For detailed setup instructions, see: [terraform-mcp-server repository](https://github.com/hashicorp/terraform-mcp-server)
+  
+  **Recommended Setup:**
+  
+  Pull and run the MCP server:
+  
+  ```bash
+  # Pull the Docker image
+  docker pull docker.io/hashicorp/terraform-mcp-server:0.3.3
+  
+  # Run the MCP server
+  docker run -d \
+    --name terraform-mcp-server \
+    -p 8500:8080 \
+    -e TRANSPORT_MODE=streamable-http \
+    -e TRANSPORT_HOST=0.0.0.0 \
+    -e MCP_SESSION_MODE=stateless \
+    --restart unless-stopped \
+    docker.io/hashicorp/terraform-mcp-server:0.3.3
+  ```
+  
+  **Verify connectivity from the terraform-pac-agent container:**
+  
+  ```bash
+  docker run --rm -it --entrypoint "" \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.22 \
+    curl http://host.docker.internal:8500/health
+  ```
+  
+  Expected response:
+  ```json
+  {"status":"ok","service":"terraform-mcp-server","transport":"streamable-http","endpoint":"/mcp"}
+  ```
 
 ### 3. Configure Environment
 
@@ -90,31 +120,45 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 ```
 
 - `AUTH_PROVIDER`: Set to `github-copilot`
-- `MODEL_NAME`: Model identifier (e.g., `claude-sonnet-4.6`)
+- `MODEL_NAME`: Select a GitHub Copilot supported model (e.g., `claude-sonnet-4.6`, `gpt-5.2`)
+  - Supported models (verified as of June 2026): `claude-sonnet-4.6`, `gpt-5.2`
+  - Note: `claude-sonnet-4.5` is NOT supported by GitHub Copilot (verified as of June 2026)
+  - You can switch between supported models without changing the access token
 - `GITHUB_COPILOT_ACCESS_TOKEN`: Your GitHub Copilot access token
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
 
 **How to get GitHub Copilot tokens:**
 
-1. Run `opencode auth login` and select GitHub Copilot
-2. Choose deployment type (usually GitHub.com)
-3. Follow the browser authentication flow with the displayed URL and code
-4. After successful login, tokens are saved in `~/.local/share/opencode/auth.json`
+**Recommended: Using Docker container (no local installation required)**
 
-You can also obtain tokens directly using the container:
+Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
-docker run --rm -it --entrypoint "" icr.io/polaris-20251120/terraform-pac-agent:0.0.21 sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
+docker run --rm -it --entrypoint "" \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.22 \
+  sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
 This will:
-- Launch the OpenCode authentication flow
-- Prompt you to select GitHub Copilot as the provider
-- Display a login URL (e.g., `https://github.com/login/device`) and code
-- After you authorize in your browser, display the tokens from `auth.json`
+1. Launch the OpenCode authentication flow in an isolated container
+2. Prompt you to select GitHub Copilot as the provider
+3. Choose deployment type (usually GitHub.com)
+4. Display a login URL (e.g., `https://github.com/login/device`) and code
+5. After you authorize in your browser, display the tokens from `auth.json`
 
-**Note:** The terraform-pac-agent container runs OpenCode internally, so it can perform the same authentication process inside the container. The container will automatically create `auth.json` from the environment variables you set in `.env`.
+![GitHub Copilot Access Setup](github-copilot-access-setup.png)
+
+**Alternative: Using local OpenCode installation**
+
+If you prefer to install OpenCode locally, you can run:
+
+```bash
+opencode auth login
+cat ~/.local/share/opencode/auth.json
+```
+
+Note: This requires OpenCode to be installed on your system. The container method is recommended as it keeps your system clean and isolated.
 
 #### Complete `.env` Example
 
@@ -134,7 +178,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.21
+IMAGE_TAG=0.0.22
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
