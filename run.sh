@@ -584,6 +584,31 @@ eval $DOCKER_RUN_CMD
 
 exit_code=$?
 
+# Append footer to HCL files for step2-generation
+if [ $exit_code -eq 0 ] && [ "$SKILL" = "step2-generation" ]; then
+    echo ""
+    echo "=========================================="
+    echo "Appending footer to generated HCL files"
+    echo "=========================================="
+    
+    # Get the policy directory path on the host
+    POLICY_DIR_HOST="${DATA_DIR_RESOLVED}/${OUTPUT_DIR}/${POLICY_DIR}"
+    
+    # Path to append_footer.py script
+    APPEND_FOOTER_SCRIPT="${SCRIPT_DIR}/append_footer.py"
+    
+    if [ -f "$APPEND_FOOTER_SCRIPT" ]; then
+        # Run the append_footer.py script
+        python3 "$APPEND_FOOTER_SCRIPT" "$POLICY_DIR_HOST" || {
+            echo "⚠️  Warning: Failed to append footer to HCL files"
+        }
+    else
+        echo "⚠️  Warning: append_footer.py script not found at $APPEND_FOOTER_SCRIPT"
+    fi
+    
+    echo ""
+fi
+
 echo ""
 echo "=========================================="
 if [ $exit_code -eq 0 ]; then
