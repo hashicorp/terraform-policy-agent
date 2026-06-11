@@ -176,6 +176,7 @@ show_usage() {
     echo "  step1-requirement --goal-file FILE"
     echo "  step2-generation --policy-dir DIR"
     echo "  step3-summary"
+    echo "  step4-validation-fixtures --policy-dir DIR"
     echo ""
     echo "Examples:"
     echo "  $0                              # Full pipeline"
@@ -183,6 +184,7 @@ show_usage() {
     echo "  $0 step1-requirement --goal-file goal-001.txt"
     echo "  $0 step2-generation --policy-dir CloudFront_Associated_WAF"
     echo "  $0 step3-summary"
+    echo "  $0 step4-validation-fixtures --policy-dir CloudFront_Associated_WAF"
     echo "  $0 --dryrun step0-extraction    # Print command without executing"
     echo ""
     echo "Note: INPUT_DIR and INPUT_FILE are read from .env (defaults: input/policy_goal.txt)"
@@ -387,6 +389,38 @@ CRITICAL: You MUST strictly follow ALL instructions in the step2-generation skil
         
         if [ -z "$PROMPT" ]; then
             PROMPT="Collect results from all policies in /workspace/data/${OUTPUT_DIR}/ and generate summary in /workspace/data/${OUTPUT_DIR}/"
+        fi
+        ;;
+        
+    step4-validation-fixtures)
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --policy-dir)
+                    POLICY_DIR="$2"
+                    shift 2
+                    ;;
+                --prompt)
+                    PROMPT="$2"
+                    shift 2
+                    ;;
+                *)
+                    echo "Unknown option for step4-validation-fixtures: $1"
+                    echo "Usage: $0 step4-validation-fixtures --policy-dir DIR [--prompt \"<prompt>\"]"
+                    exit 1
+                    ;;
+            esac
+        done
+        
+        if [ -z "$POLICY_DIR" ]; then
+            echo "ERROR: step4-validation-fixtures requires --policy-dir"
+            echo "Usage: $0 step4-validation-fixtures --policy-dir CloudFront_Associated_WAF"
+            exit 1
+        fi
+        
+        if [ -z "$PROMPT" ]; then
+            PROMPT="Read gwt.json and main.tf from /workspace/data/${OUTPUT_DIR}/${POLICY_DIR}/ and generate validation fixtures (pass_config.tf and fail_config.tf) in /workspace/data/${OUTPUT_DIR}/${POLICY_DIR}/
+
+CRITICAL: You MUST strictly follow ALL instructions in the step4-validation-fixtures skill without deviation."
         fi
         ;;
         

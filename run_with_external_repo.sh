@@ -222,7 +222,7 @@ if [ "$RUN_PREPROCESS" = true ]; then
             echo "✓ Copied: $relative_path"
             
             # Check for mock files in test directory (only if feature flag is enabled)
-            if [ "${ENABLE_SENTINEL_MOCK_USE:-false}" = "true" ]; then
+            if [ "${ENABLE_SENTINEL_MOCK_USE:-true}" = "true" ]; then
                 mock_dir="$sentinel_dir/test/$sentinel_basename"
                 if [ -d "$mock_dir" ]; then
                     # Copy mock directory
@@ -288,7 +288,7 @@ if [ "$RUN_PREPROCESS" = true ]; then
         sentinel_line="./data/${INPUT_DIR_NAME}/sentinels/$relative_path"
         
         # Check if mock directory exists for this sentinel (only if feature flag is enabled)
-        if [ "${ENABLE_SENTINEL_MOCK_USE:-false}" = "true" ]; then
+        if [ "${ENABLE_SENTINEL_MOCK_USE:-true}" = "true" ]; then
             sentinel_basename=$(basename "$sentinel_file" .sentinel)
             sentinel_dir=$(dirname "$sentinel_file")
             mock_dir="$sentinel_dir/test/$sentinel_basename"
@@ -386,6 +386,13 @@ if [ "$RUN_GENERATE" = true ]; then
         
         if [ -n "$STEP" ]; then
             echo "  Step:     $STEP"
+        fi
+        
+        # Show Stage 4 status if enabled
+        if [ "${ENABLE_STAGE4:-false}" = "true" ]; then
+            echo "  Stage 4: Enabled (Validation Fixtures Generation)"
+        else
+            echo "  Stage 4: Disabled (set ENABLE_STAGE4=true to enable)"
         fi
         echo ""
 

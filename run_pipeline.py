@@ -82,9 +82,13 @@ class PipelineExecutor:
         # Timeout configuration (in seconds)
         self.stage0_timeout = int(os.getenv("STAGE0_TIMEOUT", "600"))  # 10 minutes
         self.stage1_timeout = int(os.getenv("STAGE1_TIMEOUT", "300"))  # 5 minutes
-        self.stage2_timeout = int(os.getenv("STAGE2_TIMEOUT", "600"))  # 10 minutes
+        self.stage2_timeout = int(os.getenv("STAGE2_TIMEOUT", "900"))  # 15 minutes
         self.stage3_timeout_base = int(os.getenv("STAGE3_TIMEOUT_BASE", "180"))  # 3 minutes base
         self.stage3_timeout_per_policy = int(os.getenv("STAGE3_TIMEOUT_PER_POLICY", "60"))  # 1 minute per policy
+        self.stage4_timeout = int(os.getenv("STAGE4_TIMEOUT", "300"))  # 5 minutes
+
+        # Stage 4 enable flag
+        self.enable_stage4 = os.getenv("ENABLE_STAGE4", "false").lower() in ("true", "1", "yes")
         
         # Container configuration
         self.container_prefix = os.getenv("CONTAINER_PREFIX", "terraform-pac-agent-skills")
@@ -497,6 +501,25 @@ class PipelineExecutor:
         print(f"  ✓ Verification passed: Policy and test files created for {policy_name}")
         return True
     
+    def _verify_stage4_output(self, policy_dir: Path) -> bool:
+        """Verify that Stage 4 produced expected output files for a policy."""
+        policy_name = policy_dir.name
+        
+        # Check for pass_config.tf
+        pass_config = policy_dir / "pass_config.tf"
+        if not pass_config.exists():
+            print(f"  ✗ Verification failed: pass_config.tf not found in {policy_name}")
+            return False
+        
+        # Check for fail_config.tf
+        fail_config = policy_dir / "fail_config.tf"
+        if not fail_config.exists():
+            print(f"  ✗ Verification failed: fail_config.tf not found in {policy_name}")
+            return False
+        
+        print(f"  ✓ Verification passed: Fixture files created for {policy_name}")
+        return True
+    
     def _verify_stage3_output(self) -> bool:
         """Verify that Stage 3 produced expected output files."""
         summary_json = self.output_dir / "summary.json"
@@ -653,8 +676,12 @@ class PipelineExecutor:
         
         return (goal_name, True, "")
     
-    def stage1_requirement(self) -> bool:
-        """Stage 1: Generate requirements for all goals (parallel execution with priority retry)"""
+    def stage1_requirement(self) -> Tuple[bool, List[str]]:
+        """Stage 1: Generate requirements for all goals (parallel execution with priority retry)
+        
+        Returns:
+            Tuple of (all_succeeded, list_of_successful_policy_dirs)
+        """
         from queue import PriorityQueue
         from threading import Lock
         
@@ -662,7 +689,7 @@ class PipelineExecutor:
         
         if not goal_files:
             print("❌ No goal files found")
-            return False
+            return False, []
         
         print(f"\n{'='*80}")
         print(f"Stage 1: Requirement Generation (Parallel)")
@@ -676,6 +703,7 @@ class PipelineExecutor:
         task_counter = 0
         results: Dict[str, Tuple[bool, str]] = {}
         retry_count: Dict[str, int] = {}
+        goal_to_policy_dir: Dict[str, Optional[Path]] = {}  # Track which policy dir each goal created
         results_lock = Lock()
         
         # Add initial tasks to queue (priority=1 for initial tasks)
@@ -684,6 +712,7 @@ class PipelineExecutor:
             task_counter += 1
             goal_name = goal_file.stem
             retry_count[goal_name] = 0
+            goal_to_policy_dir[goal_name] = None
         
         total_tasks = len(goal_files)
         completed = 0
@@ -715,6 +744,12 @@ class PipelineExecutor:
                             results[goal_name] = (success, error)
                             log_suffix = "_retry" if is_retry else ""
                             log_file = self.goals_dir / f"{goal_name}_stage1{log_suffix}.log"
+                            
+                            # Identify and track the policy directory for this goal
+                            policy_dir = self._identify_policy_directory_for_goal(goal_file, log_file)
+                            if policy_dir:
+                                goal_to_policy_dir[goal_name] = policy_dir
+                            
                             print(f"  ✓ Completed{retry_label}: {goal_name} (log: {log_file})")
                         else:
                             # Check if we should retry
@@ -754,6 +789,8 @@ class PipelineExecutor:
         # This catches cases where directories were created but files were deleted (e.g., by post-hooks)
         print("Performing final verification of policy directories...")
         
+        successful_policy_dirs = []
+        
         if self.output_dir.exists():
             policy_dirs = [d for d in self.output_dir.iterdir()
                           if d.is_dir() and not d.name.startswith('.') and d.name != 'goals']
@@ -762,6 +799,9 @@ class PipelineExecutor:
             for policy_dir in policy_dirs:
                 if not self._verify_policy_directory(policy_dir):
                     incomplete_dirs.append(policy_dir)
+                else:
+                    # This directory is complete and can proceed to stage2
+                    successful_policy_dirs.append(policy_dir.name)
             
             if incomplete_dirs:
                 print(f"\n⚠️  Found {len(incomplete_dirs)} incomplete policy director{'y' if len(incomplete_dirs) == 1 else 'ies'}:")
@@ -783,6 +823,8 @@ class PipelineExecutor:
                                     results[goal_name] = (False, f"Policy directory {policy_dir.name} missing required files")
                                     completed -= 1
                                     failed += 1
+                                    # Remove from goal_to_policy_dir mapping
+                                    goal_to_policy_dir[goal_name] = None
                             
                             goal_identified = True
                             break
@@ -790,10 +832,11 @@ class PipelineExecutor:
                     if not goal_identified:
                         print(f"  - {policy_dir.name} (could not identify source goal)")
                 
-                print(f"\n❌ Stage 1 final status: {completed} succeeded, {failed} failed\n")
-                return False
+                print(f"\n⚠️  Stage 1 final status: {completed} succeeded, {failed} failed")
+                print(f"✓ {len(successful_policy_dirs)} policy director{'y' if len(successful_policy_dirs) == 1 else 'ies'} will proceed to Stage 2\n")
         
-        return failed == 0
+        # Return success status and list of successful policy directories
+        return (failed == 0, successful_policy_dirs)
     
     def _run_single_generation(self, policy_dir: str, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
         """
@@ -835,18 +878,38 @@ class PipelineExecutor:
         
         return (policy_dir, True, "")
     
-    def stage2_generation(self) -> bool:
-        """Stage 2: Generate policies and tests (parallel execution with priority retry)"""
+    def stage2_generation(self, policy_dirs_filter: Optional[List[str]] = None) -> bool:
+        """Stage 2: Generate policies and tests (parallel execution with priority retry)
+        
+        Args:
+            policy_dirs_filter: Optional list of policy directory names to process.
+                              If provided, only these directories will be processed.
+                              If None, all policy directories will be processed.
+        """
         from queue import PriorityQueue
         from threading import Lock
         
-        policy_dirs = sorted([
+        # Get all policy directories
+        all_policy_dirs = sorted([
             d.name for d in self.output_dir.iterdir()
             if d.is_dir() and d.name != "goals"
         ])
         
+        # Apply filter if provided
+        if policy_dirs_filter is not None:
+            policy_dirs = [d for d in all_policy_dirs if d in policy_dirs_filter]
+            skipped_dirs = [d for d in all_policy_dirs if d not in policy_dirs_filter]
+            
+            if skipped_dirs:
+                print(f"\n⚠️  Skipping {len(skipped_dirs)} policy director{'y' if len(skipped_dirs) == 1 else 'ies'} that failed in Stage 1:")
+                for skipped_dir in skipped_dirs:
+                    print(f"  - {skipped_dir}")
+                print()
+        else:
+            policy_dirs = all_policy_dirs
+        
         if not policy_dirs:
-            print("❌ No policy directories found")
+            print("❌ No policy directories to process")
             return False
         
         print(f"\n{'='*80}")
@@ -936,6 +999,46 @@ class PipelineExecutor:
         
         return failed == 0
     
+    def _run_single_fixtures(self, policy_dir: str, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
+        """
+        Run validation fixtures generation for a single policy directory
+        
+        Args:
+            policy_dir: Name of the policy directory
+            index: Current index in processing
+            total: Total number of policies
+            retry: Whether this is a retry attempt
+        
+        Returns:
+            Tuple of (policy_name, success, error_message)
+        """
+        log_suffix = "_retry" if retry else ""
+        log_file = self.output_dir / policy_dir / f"stage4_fixtures{log_suffix}.log"
+        
+        retry_label = " (retry)" if retry else ""
+        print(f"  [{index}/{total}] Processing{retry_label}: {policy_dir}")
+        
+        # Use configured timeout
+        success = self._run_docker_command(
+            skill="step4-validation-fixtures",
+            prompt="",  # Not used when skill_args provided
+            stage_name=f"Stage 4: Fixtures ({policy_dir}){retry_label}",
+            container_suffix=f"{policy_dir.replace('/', '-')}-fixtures{'-retry' if retry else ''}",
+            log_file=log_file,
+            timeout_seconds=self.stage4_timeout,
+            skill_args=["--policy-dir", policy_dir]
+        )
+        
+        if not success:
+            return (policy_dir, False, "Execution failed")
+        
+        # Verify output even if exit code was 0
+        policy_path = self.output_dir / policy_dir
+        if not self._verify_stage4_output(policy_path):
+            return (policy_dir, False, "Output verification failed")
+        
+        return (policy_dir, True, "")
+    
     def stage3_summary(self) -> bool:
         """Stage 3: Generate summary of all policies"""
         print(f"\n{'='*80}")
@@ -967,6 +1070,127 @@ class PipelineExecutor:
         
         return True
     
+    def stage4_fixtures(self, policy_dirs_filter: Optional[List[str]] = None) -> bool:
+        """Stage 4: Generate validation fixtures (parallel execution with priority retry)
+        
+        Args:
+            policy_dirs_filter: Optional list of policy directory names to process.
+                              If provided, only these directories will be processed.
+                              If None, all policy directories will be processed.
+        """
+        from queue import PriorityQueue
+        from threading import Lock
+        
+        # Get all policy directories
+        all_policy_dirs = sorted([
+            d.name for d in self.output_dir.iterdir()
+            if d.is_dir() and d.name != "goals"
+        ])
+        
+        # Apply filter if provided
+        if policy_dirs_filter is not None:
+            policy_dirs = [d for d in all_policy_dirs if d in policy_dirs_filter]
+            skipped_dirs = [d for d in all_policy_dirs if d not in policy_dirs_filter]
+            
+            if skipped_dirs:
+                print(f"\n⚠️  Skipping {len(skipped_dirs)} policy director{'y' if len(skipped_dirs) == 1 else 'ies'} that failed in Stage 2:")
+                for skipped_dir in skipped_dirs:
+                    print(f"  - {skipped_dir}")
+                print()
+        else:
+            policy_dirs = all_policy_dirs
+        
+        if not policy_dirs:
+            print("❌ No policy directories to process")
+            return False
+        
+        print(f"\n{'='*80}")
+        print(f"Stage 4: Validation Fixtures Generation (Parallel)")
+        print(f"{'='*80}")
+        print(f"Found {len(policy_dirs)} policy/policies to process")
+        print(f"Max workers: {self.max_workers}\n")
+        
+        # Priority queue: (priority, counter, policy_dir, index, is_retry)
+        # Lower priority number = higher priority (0 = retry, 1 = initial)
+        task_queue = PriorityQueue()
+        task_counter = 0
+        results: Dict[str, Tuple[bool, str]] = {}
+        retry_count: Dict[str, int] = {}
+        results_lock = Lock()
+        
+        # Add initial tasks to queue (priority=1 for initial tasks)
+        for index, policy_dir in enumerate(policy_dirs, 1):
+            task_queue.put((1, task_counter, policy_dir, index, False))
+            task_counter += 1
+            retry_count[policy_dir] = 0
+        
+        total_tasks = len(policy_dirs)
+        completed = 0
+        failed = 0
+        
+        # Worker function that processes tasks from the queue
+        def worker():
+            nonlocal completed, failed, task_counter
+            
+            while True:
+                try:
+                    # Get task from queue (blocks if empty)
+                    priority, _, policy_dir, index, is_retry = task_queue.get(timeout=1)
+                except:
+                    # Queue is empty and timeout reached
+                    break
+                
+                try:
+                    # Execute the task
+                    policy_name, success, error = self._run_single_fixtures(
+                        policy_dir, index, total_tasks, retry=is_retry
+                    )
+                    
+                    retry_label = " (retry)" if is_retry else ""
+                    
+                    with results_lock:
+                        if success:
+                            completed += 1
+                            results[policy_name] = (success, error)
+                            log_suffix = "_retry" if is_retry else ""
+                            log_file = self.output_dir / policy_name / f"stage4_fixtures{log_suffix}.log"
+                            print(f"  ✓ Completed{retry_label}: {policy_name} (log: {log_file})")
+                        else:
+                            # Check if we should retry
+                            if retry_count[policy_dir] == 0:
+                                # Add retry task with higher priority (0)
+                                retry_count[policy_dir] = 1
+                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error}")
+                                print(f"  ⟳ Queuing retry with high priority: {policy_name}")
+                                task_queue.put((0, task_counter, policy_dir, index, True))
+                                task_counter += 1
+                            else:
+                                # Already retried once, mark as final failure
+                                failed += 1
+                                results[policy_name] = (success, error)
+                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error} (no more retries)")
+                finally:
+                    task_queue.task_done()
+        
+        # Start worker threads
+        import threading
+        threads = []
+        for _ in range(self.max_workers):
+            t = threading.Thread(target=worker)
+            t.start()
+            threads.append(t)
+        
+        # Wait for all tasks to complete
+        task_queue.join()
+        
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
+        
+        print(f"\n✅ Stage 4 completed: {completed} succeeded, {failed} failed\n")
+        
+        return failed == 0
+        
     def run_full_pipeline(self) -> bool:
         """
         Run the complete pipeline from start to finish
@@ -991,17 +1215,40 @@ class PipelineExecutor:
             return False
         
         # Stage 1: Requirement Generation (parallel)
-        if not self.stage1_requirement():
-            print("\n⚠️  Stage 1 had failures, but continuing...")
+        stage1_success, successful_policy_dirs = self.stage1_requirement()
+        if not stage1_success:
+            print("\n⚠️  Stage 1 had failures")
+            if not successful_policy_dirs:
+                print("❌ No policies succeeded in Stage 1, cannot proceed to Stage 2")
+                return False
+            print(f"✓ {len(successful_policy_dirs)} policy/policies succeeded and will proceed to Stage 2\n")
         
-        # Stage 2: Policy Generation (parallel)
-        if not self.stage2_generation():
+        # Stage 2: Policy Generation (parallel) - only process successful policies from Stage 1
+        stage2_success = self.stage2_generation(policy_dirs_filter=successful_policy_dirs)
+        if not stage2_success:
             print("\n⚠️  Stage 2 had failures, but continuing...")
         
         # Stage 3: Summary
         if not self.stage3_summary():
             print("\n❌ Pipeline failed at Stage 3")
             return False
+        
+        # Stage 4: Validation Fixtures Generation (parallel) - only if enabled
+        if self.enable_stage4:
+            # Get list of policies that succeeded in Stage 2
+            stage2_successful_dirs = []
+            for policy_dir in successful_policy_dirs:
+                policy_path = self.output_dir / policy_dir
+                if self._verify_stage2_output(policy_path):
+                    stage2_successful_dirs.append(policy_dir)
+            
+            if stage2_successful_dirs:
+                if not self.stage4_fixtures(policy_dirs_filter=stage2_successful_dirs):
+                    print("\n⚠️  Stage 4 had failures, but continuing...")
+            else:
+                print("\n⚠️  No policies succeeded in Stage 2, skipping Stage 4")
+        else:
+            print("\n⏭️  Stage 4 is disabled (set ENABLE_STAGE4=true to enable)")
         
         elapsed_time = time.time() - start_time
         
@@ -1013,6 +1260,8 @@ class PipelineExecutor:
         print(f"  Stage 1: {self.goals_dir}/goal-*_stage1.log")
         print(f"  Stage 2: {self.output_dir}/<PolicyName>/stage2_generation.log")
         print(f"  Stage 3: {self.output_dir}/stage3_summary.log")
+        if self.enable_stage4:
+            print(f"  Stage 4: {self.output_dir}/<PolicyName>/stage4_fixtures.log")
         print("="*80 + "\n")
         
         return True
