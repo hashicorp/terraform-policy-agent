@@ -87,6 +87,9 @@ class PipelineExecutor:
         self.stage3_timeout_per_policy = int(os.getenv("STAGE3_TIMEOUT_PER_POLICY", "60"))  # 1 minute per policy
         self.stage4_timeout = int(os.getenv("STAGE4_TIMEOUT", "300"))  # 5 minutes
 
+        # Retry configuration
+        self.max_retries = int(os.getenv("MAX_RETRIES", "1"))  # Default: 1 retry (backward compatible)
+
         # Stage 4 enable flag
         self.enable_stage4 = os.getenv("ENABLE_STAGE4", "false").lower() in ("true", "1", "yes")
         
@@ -599,14 +602,17 @@ class PipelineExecutor:
         retry_label = " (retry)" if retry else ""
         print(f"  [{index}/{total}] Processing{retry_label}: {goal_file.name}")
         
-        # Use configured timeout
+        # Use configured timeout (1.5x for retry)
+        timeout = int(self.stage1_timeout * 1.5) if retry else self.stage1_timeout
+        if retry:
+            print(f"  Using increased timeout for retry: {timeout}s (base: {self.stage1_timeout}s, multiplier: 1.5x)")
         success = self._run_docker_command(
             skill="step1-requirement",
             prompt="",  # Not used when skill_args provided
             stage_name=f"Stage 1: Requirement ({goal_name}){retry_label}",
             container_suffix=f"{goal_name}{'-retry' if retry else ''}",
             log_file=log_file,
-            timeout_seconds=self.stage1_timeout,
+            timeout_seconds=timeout,
             skill_args=["--goal-file", goal_file.name]
         )
         
@@ -753,18 +759,18 @@ class PipelineExecutor:
                             print(f"  ✓ Completed{retry_label}: {goal_name} (log: {log_file})")
                         else:
                             # Check if we should retry
-                            if retry_count[goal_name] == 0:
+                            if retry_count[goal_name] < self.max_retries:
                                 # Add retry task with higher priority (0)
-                                retry_count[goal_name] = 1
+                                retry_count[goal_name] += 1
                                 print(f"  ✗ Failed{retry_label}: {goal_name} - {error}")
-                                print(f"  ⟳ Queuing retry with high priority: {goal_name}")
+                                print(f"  ⟳ Queuing retry {retry_count[goal_name]}/{self.max_retries} with high priority: {goal_name}")
                                 task_queue.put((0, task_counter, goal_file, index, True))
                                 task_counter += 1
                             else:
-                                # Already retried once, mark as final failure
+                                # Max retries reached, mark as final failure
                                 failed += 1
                                 results[goal_name] = (success, error)
-                                print(f"  ✗ Failed{retry_label}: {goal_name} - {error} (no more retries)")
+                                print(f"  ✗ Failed{retry_label}: {goal_name} - {error} (max retries {self.max_retries} reached)")
                 finally:
                     task_queue.task_done()
         
@@ -857,14 +863,17 @@ class PipelineExecutor:
         retry_label = " (retry)" if retry else ""
         print(f"  [{index}/{total}] Processing{retry_label}: {policy_dir}")
         
-        # Use configured timeout
+        # Use configured timeout (1.5x for retry)
+        timeout = int(self.stage2_timeout * 1.5) if retry else self.stage2_timeout
+        if retry:
+            print(f"  Using increased timeout for retry: {timeout}s (base: {self.stage2_timeout}s, multiplier: 1.5x)")
         success = self._run_docker_command(
             skill="step2-generation",
             prompt="",  # Not used when skill_args provided
             stage_name=f"Stage 2: Generation ({policy_dir}){retry_label}",
             container_suffix=f"{policy_dir.replace('/', '-')}{'-retry' if retry else ''}",
             log_file=log_file,
-            timeout_seconds=self.stage2_timeout,
+            timeout_seconds=timeout,
             skill_args=["--policy-dir", policy_dir]
         )
         
@@ -965,18 +974,18 @@ class PipelineExecutor:
                             print(f"  ✓ Completed{retry_label}: {policy_name} (log: {log_file})")
                         else:
                             # Check if we should retry
-                            if retry_count[policy_dir] == 0:
+                            if retry_count[policy_dir] < self.max_retries:
                                 # Add retry task with higher priority (0)
-                                retry_count[policy_dir] = 1
+                                retry_count[policy_dir] += 1
                                 print(f"  ✗ Failed{retry_label}: {policy_name} - {error}")
-                                print(f"  ⟳ Queuing retry with high priority: {policy_name}")
+                                print(f"  ⟳ Queuing retry {retry_count[policy_dir]}/{self.max_retries} with high priority: {policy_name}")
                                 task_queue.put((0, task_counter, policy_dir, index, True))
                                 task_counter += 1
                             else:
-                                # Already retried once, mark as final failure
+                                # Max retries reached, mark as final failure
                                 failed += 1
                                 results[policy_name] = (success, error)
-                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error} (no more retries)")
+                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error} (max retries {self.max_retries} reached)")
                 finally:
                     task_queue.task_done()
         
@@ -1018,14 +1027,17 @@ class PipelineExecutor:
         retry_label = " (retry)" if retry else ""
         print(f"  [{index}/{total}] Processing{retry_label}: {policy_dir}")
         
-        # Use configured timeout
+        # Use configured timeout (1.5x for retry)
+        timeout = int(self.stage4_timeout * 1.5) if retry else self.stage4_timeout
+        if retry:
+            print(f"  Using increased timeout for retry: {timeout}s (base: {self.stage4_timeout}s, multiplier: 1.5x)")
         success = self._run_docker_command(
             skill="step4-validation-fixtures",
             prompt="",  # Not used when skill_args provided
             stage_name=f"Stage 4: Fixtures ({policy_dir}){retry_label}",
             container_suffix=f"{policy_dir.replace('/', '-')}-fixtures{'-retry' if retry else ''}",
             log_file=log_file,
-            timeout_seconds=self.stage4_timeout,
+            timeout_seconds=timeout,
             skill_args=["--policy-dir", policy_dir]
         )
         
@@ -1157,18 +1169,18 @@ class PipelineExecutor:
                             print(f"  ✓ Completed{retry_label}: {policy_name} (log: {log_file})")
                         else:
                             # Check if we should retry
-                            if retry_count[policy_dir] == 0:
+                            if retry_count[policy_dir] < self.max_retries:
                                 # Add retry task with higher priority (0)
-                                retry_count[policy_dir] = 1
+                                retry_count[policy_dir] += 1
                                 print(f"  ✗ Failed{retry_label}: {policy_name} - {error}")
-                                print(f"  ⟳ Queuing retry with high priority: {policy_name}")
+                                print(f"  ⟳ Queuing retry {retry_count[policy_dir]}/{self.max_retries} with high priority: {policy_name}")
                                 task_queue.put((0, task_counter, policy_dir, index, True))
                                 task_counter += 1
                             else:
-                                # Already retried once, mark as final failure
+                                # Max retries reached, mark as final failure
                                 failed += 1
                                 results[policy_name] = (success, error)
-                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error} (no more retries)")
+                                print(f"  ✗ Failed{retry_label}: {policy_name} - {error} (max retries {self.max_retries} reached)")
                 finally:
                     task_queue.task_done()
         

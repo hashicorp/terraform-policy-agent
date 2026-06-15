@@ -168,7 +168,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.23 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.24 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -236,7 +236,7 @@ Ask: "Do you want to customize Docker settings?" (default: No)
 
 If yes, ask for:
 - **IMAGE_NAME** (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- **IMAGE_TAG** (default: "0.0.23")
+- **IMAGE_TAG** (default: "0.0.24")
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
 
 ### 6. Timeout Configuration (Optional)

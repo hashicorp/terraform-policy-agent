@@ -31,7 +31,7 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.23
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.24
 ```
 
 **Required Binaries**:
@@ -73,7 +73,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/polaris-20251120/terraform-pac-agent:0.0.23 \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.24 \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -136,7 +136,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.23 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.24 \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -178,7 +178,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.23
+IMAGE_TAG=0.0.24
 
 # Binaries (required - must match container architecture)
 # M1/M2 Mac: use linux-arm64 binaries
