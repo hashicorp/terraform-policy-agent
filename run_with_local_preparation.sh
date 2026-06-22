@@ -567,7 +567,7 @@ DOCKER_CMD="docker run --rm \\
   -v \"${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}\" \\
   ${LOCAL_SKILLS_MOUNT_DISPLAY}${ENV_VARS} \\
   \"${IMAGE_NAME}:${IMAGE_TAG}\" \\
-  opencode run \"/${SKILL} ${PROMPT}\""
+  sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
 
 if [ "$DRYRUN" = true ]; then
     # Print the command in dry-run mode
@@ -639,7 +639,7 @@ case "${AUTH_PROVIDER:-litellm}" in
 esac
 
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD \"${IMAGE_NAME}:${IMAGE_TAG}\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD opencode run \"/${SKILL} ${PROMPT}\""
+DOCKER_RUN_CMD="$DOCKER_RUN_CMD sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
 
 # Execute the docker run command
 eval $DOCKER_RUN_CMD
