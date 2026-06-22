@@ -30,6 +30,7 @@ import time
 import signal
 import atexit
 import re
+import json
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -331,7 +332,8 @@ class PipelineExecutor:
                             if verbose:
                                 print(cleaned_remaining, end='')
                             if log_handle:
-                                log_handle.write(cleaned_remaining)
+                                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                                log_handle.write(f"[{timestamp}] {cleaned_remaining}")
                                 log_handle.flush()
                     break
                 
@@ -349,7 +351,8 @@ class PipelineExecutor:
                             if verbose:
                                 print(cleaned_line, end='')
                             if log_handle:
-                                log_handle.write(cleaned_line)
+                                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                                log_handle.write(f"[{timestamp}] {cleaned_line}")
                                 log_handle.flush()
             
             # Get the return code (process has already finished)
@@ -1222,11 +1225,14 @@ class PipelineExecutor:
         start_time = time.time()
         
         # Stage 0: Extraction
+        stage0_start = time.time()
         if not self.stage0_extraction():
             print("\n❌ Pipeline failed at Stage 0")
             return False
+        stage0_duration = time.time() - stage0_start
         
         # Stage 1: Requirement Generation (parallel)
+        stage1_start = time.time()
         stage1_success, successful_policy_dirs = self.stage1_requirement()
         if not stage1_success:
             print("\n⚠️  Stage 1 had failures")
@@ -1234,18 +1240,24 @@ class PipelineExecutor:
                 print("❌ No policies succeeded in Stage 1, cannot proceed to Stage 2")
                 return False
             print(f"✓ {len(successful_policy_dirs)} policy/policies succeeded and will proceed to Stage 2\n")
+        stage1_duration = time.time() - stage1_start
         
         # Stage 2: Policy Generation (parallel) - only process successful policies from Stage 1
+        stage2_start = time.time()
         stage2_success = self.stage2_generation(policy_dirs_filter=successful_policy_dirs)
+        stage2_duration = time.time() - stage2_start
         if not stage2_success:
             print("\n⚠️  Stage 2 had failures, but continuing...")
         
         # Stage 3: Summary
+        stage3_start = time.time()
         if not self.stage3_summary():
             print("\n❌ Pipeline failed at Stage 3")
             return False
+        stage3_duration = time.time() - stage3_start
         
         # Stage 4: Validation Fixtures Generation (parallel) - only if enabled
+        stage4_duration = 0
         if self.enable_stage4:
             # Get list of policies that succeeded in Stage 2
             stage2_successful_dirs = []
@@ -1255,8 +1267,10 @@ class PipelineExecutor:
                     stage2_successful_dirs.append(policy_dir)
             
             if stage2_successful_dirs:
+                stage4_start = time.time()
                 if not self.stage4_fixtures(policy_dirs_filter=stage2_successful_dirs):
                     print("\n⚠️  Stage 4 had failures, but continuing...")
+                stage4_duration = time.time() - stage4_start
             else:
                 print("\n⚠️  No policies succeeded in Stage 2, skipping Stage 4")
         else:
@@ -1267,6 +1281,16 @@ class PipelineExecutor:
         print("\n" + "="*80)
         print("✅ Full pipeline completed!")
         print(f"Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.1f} minutes)")
+        print("\n" + "-"*80)
+        print("EXECUTION TIME BY STAGE")
+        print("-"*80)
+        print(f"Stage 0 duration: {stage0_duration:.2f} seconds")
+        print(f"Stage 1 duration: {stage1_duration:.2f} seconds")
+        print(f"Stage 2 duration: {stage2_duration:.2f} seconds")
+        print(f"Stage 3 duration: {stage3_duration:.2f} seconds")
+        if self.enable_stage4:
+            print(f"Stage 4 duration: {stage4_duration:.2f} seconds")
+        print("-"*80)
         print(f"\nLogs location:")
         print(f"  Stage 0: {self.output_dir}/stage0_extraction.log")
         print(f"  Stage 1: {self.goals_dir}/goal-*_stage1.log")
@@ -1276,7 +1300,293 @@ class PipelineExecutor:
             print(f"  Stage 4: {self.output_dir}/<PolicyName>/stage4_fixtures.log")
         print("="*80 + "\n")
         
+
+        # Collect token usage metrics from log files
+        print("\n" + "="*80)
+        print("TOKEN USAGE METRICS")
+        print("="*80)
+        
+        # Stage 0: Extract from stage0_extraction.log
+        stage0_log = self.output_dir / "stage0_extraction.log"
+        stage0_tokens = self._extract_token_usage_from_log(str(stage0_log)) if stage0_log.exists() else {
+            'total_tokens_in': 0, 'total_tokens_out': 0, 'total_cost': 0, 'cache_read': 0, 'cache_write': 0
+        }
+        print(f"Stage 0 tokens: {stage0_tokens['total_tokens_in']+stage0_tokens['total_tokens_out']:,} (In: {stage0_tokens['total_tokens_in']:,}, Out: {stage0_tokens['total_tokens_out']:,}, Cache Read: {stage0_tokens['cache_read']:,}, Cache Write: {stage0_tokens['cache_write']:,})")
+        
+        # Stage 1: Extract from all stage1_requirement_*.log files in goals directory
+        stage1_logs = []
+        if self.goals_dir.exists():
+            stage1_logs = list(self.goals_dir.glob("*_stage1.log"))
+        stage1_tokens = self._collect_stage_token_metrics("stage1", stage1_logs)
+        print(f"Stage 1 tokens: {stage1_tokens['total_tokens_in']+stage1_tokens['total_tokens_out']:,} (In: {stage1_tokens['total_tokens_in']:,}, Out: {stage1_tokens['total_tokens_out']:,}, Cache Read: {stage1_tokens['cache_read']:,}, Cache Write: {stage1_tokens['cache_write']:,})")
+        
+        # Stage 2: Extract from all stage2_generation.log files in policy directories
+        stage2_logs = []
+        for policy_dir in self.output_dir.iterdir():
+            if policy_dir.is_dir() and not policy_dir.name.startswith('.') and policy_dir.name != 'goals':
+                stage2_log = policy_dir / "stage2_generation.log"
+                if stage2_log.exists():
+                    stage2_logs.append(stage2_log)
+        stage2_tokens = self._collect_stage_token_metrics("stage2", stage2_logs)
+        print(f"Stage 2 tokens: {stage2_tokens['total_tokens_in']+stage2_tokens['total_tokens_out']:,} (In: {stage2_tokens['total_tokens_in']:,}, Out: {stage2_tokens['total_tokens_out']:,}, Cache Read: {stage2_tokens['cache_read']:,}, Cache Write: {stage2_tokens['cache_write']:,})")
+        
+        # Stage 3: Extract from stage3_summary.log
+        stage3_log = self.output_dir / "stage3_summary.log"
+        stage3_tokens = self._extract_token_usage_from_log(str(stage3_log)) if stage3_log.exists() else {
+            'total_tokens_in': 0, 'total_tokens_out': 0, 'total_cost': 0, 'cache_read': 0, 'cache_write': 0
+        }
+        print(f"Stage 3 tokens: {stage3_tokens['total_tokens_in']+stage3_tokens['total_tokens_out']:,} (In: {stage3_tokens['total_tokens_in']:,}, Out: {stage3_tokens['total_tokens_out']:,}, Cache Read: {stage3_tokens['cache_read']:,}, Cache Write: {stage3_tokens['cache_write']:,})")
+        
+        # Stage 4: Extract from all stage4_fixtures.log files in policy directories (if enabled)
+        stage4_tokens = {'total_tokens_in': 0, 'total_tokens_out': 0, 'total_cost': 0, 'cache_read': 0, 'cache_write': 0}
+        if self.enable_stage4:
+            stage4_logs = []
+            for policy_dir in self.output_dir.iterdir():
+                if policy_dir.is_dir() and not policy_dir.name.startswith('.') and policy_dir.name != 'goals':
+                    stage4_log = policy_dir / "stage4_fixtures.log"
+                    if stage4_log.exists():
+                        stage4_logs.append(stage4_log)
+            stage4_tokens = self._collect_stage_token_metrics("stage4", stage4_logs)
+            print(f"Stage 4 tokens: {stage4_tokens['total_tokens_in']+stage4_tokens['total_tokens_out']:,} (In: {stage4_tokens['total_tokens_in']:,}, Out: {stage4_tokens['total_tokens_out']:,}, Cache Read: {stage4_tokens['cache_read']:,}, Cache Write: {stage4_tokens['cache_write']:,})")
+        
+        # Calculate totals
+        total_tokens_in = (stage0_tokens['total_tokens_in'] + stage1_tokens['total_tokens_in'] +
+                            stage2_tokens['total_tokens_in'] + stage3_tokens['total_tokens_in'] +
+                            stage4_tokens['total_tokens_in'])
+        total_tokens_out = (stage0_tokens['total_tokens_out'] + stage1_tokens['total_tokens_out'] +
+                            stage2_tokens['total_tokens_out'] + stage3_tokens['total_tokens_out'] +
+                            stage4_tokens['total_tokens_out'])
+        total_tokens = total_tokens_in + total_tokens_out
+        total_cache_read = (stage0_tokens['cache_read'] + stage1_tokens['cache_read'] +
+                            stage2_tokens['cache_read'] + stage3_tokens['cache_read'] +
+                            stage4_tokens['cache_read'])
+        total_cache_write = (stage0_tokens['cache_write'] + stage1_tokens['cache_write'] +
+                             stage2_tokens['cache_write'] + stage3_tokens['cache_write'] +
+                             stage4_tokens['cache_write'])
+        total_cost = (stage0_tokens['total_cost'] + stage1_tokens['total_cost'] +
+                        stage2_tokens['total_cost'] + stage3_tokens['total_cost'] +
+                        stage4_tokens['total_cost'])
+        
+        print(f"\nTotal tokens: {total_tokens:,} (In: {total_tokens_in:,}, Out: {total_tokens_out:,})")
+        print(f"Total cache: Cache Read: {total_cache_read:,}, Cache Write: {total_cache_write:,}")
+        print(f"Total cost: ${total_cost:.2f}")
+        
+        # Save execution time and token metrics to JSON file
+        total_duration = stage0_duration + stage1_duration + stage2_duration + stage3_duration + stage4_duration
+        metrics_file = os.path.join(self.output_dir, 'execution_metrics.json')
+        metrics_data = {
+            'start_time': datetime.fromtimestamp(start_time).isoformat(),
+            'end_time': datetime.now().isoformat(),
+            'stage0_duration_seconds': stage0_duration,
+            'stage1_duration_seconds': stage1_duration,
+            'stage2_duration_seconds': stage2_duration,
+            'stage3_duration_seconds': stage3_duration,
+            'stage4_duration_seconds': stage4_duration,
+            'total_duration_seconds': total_duration,
+            'stage0_duration_formatted': self._format_duration(stage0_duration),
+            'stage1_duration_formatted': self._format_duration(stage1_duration),
+            'stage2_duration_formatted': self._format_duration(stage2_duration),
+            'stage3_duration_formatted': self._format_duration(stage3_duration),
+            'stage4_duration_formatted': self._format_duration(stage4_duration),
+            'total_duration_formatted': self._format_duration(total_duration),
+            'stage0_tokens_in': stage0_tokens['total_tokens_in'],
+            'stage0_tokens_out': stage0_tokens['total_tokens_out'],
+            'stage0_tokens': stage0_tokens['total_tokens_in'] + stage0_tokens['total_tokens_out'],
+            'stage0_cache_read': stage0_tokens['cache_read'],
+            'stage0_cache_write': stage0_tokens['cache_write'],
+            'stage1_tokens_in': stage1_tokens['total_tokens_in'],
+            'stage1_tokens_out': stage1_tokens['total_tokens_out'],
+            'stage1_tokens': stage1_tokens['total_tokens_in'] + stage1_tokens['total_tokens_out'],
+            'stage1_cache_read': stage1_tokens['cache_read'],
+            'stage1_cache_write': stage1_tokens['cache_write'],
+            'stage2_tokens_in': stage2_tokens['total_tokens_in'],
+            'stage2_tokens_out': stage2_tokens['total_tokens_out'],
+            'stage2_tokens': stage2_tokens['total_tokens_in'] + stage2_tokens['total_tokens_out'],
+            'stage2_cache_read': stage2_tokens['cache_read'],
+            'stage2_cache_write': stage2_tokens['cache_write'],
+            'stage3_tokens_in': stage3_tokens['total_tokens_in'],
+            'stage3_tokens_out': stage3_tokens['total_tokens_out'],
+            'stage3_tokens': stage3_tokens['total_tokens_in'] + stage3_tokens['total_tokens_out'],
+            'stage3_cache_read': stage3_tokens['cache_read'],
+            'stage3_cache_write': stage3_tokens['cache_write'],
+            'stage4_tokens_in': stage4_tokens['total_tokens_in'],
+            'stage4_tokens_out': stage4_tokens['total_tokens_out'],
+            'stage4_tokens': stage4_tokens['total_tokens_in'] + stage4_tokens['total_tokens_out'],
+            'stage4_cache_read': stage4_tokens['cache_read'],
+            'stage4_cache_write': stage4_tokens['cache_write'],
+            'total_tokens_in': total_tokens_in,
+            'total_tokens_out': total_tokens_out,
+            'total_tokens': total_tokens,
+            'total_cache_read': total_cache_read,
+            'total_cache_write': total_cache_write,
+            'total_cost': total_cost
+        }
+        with open(metrics_file, 'w', encoding='utf-8') as f:
+            json.dump(metrics_data, f, indent=2, ensure_ascii=False)
+        print(f"\nExecution metrics (with token usage) saved to: {metrics_file}")
         return True
+
+    def _extract_execution_time_from_log(self, log_file: str) -> float:
+        """
+        Extract execution time from log file by finding first and last timestamps.
+        Supports multiple timestamp formats.
+        Returns time in seconds.
+        """
+        first_timestamp = None
+        last_timestamp = None
+        
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    timestamp = None
+                    
+                    # Try pattern 1: [YYYY-MM-DD HH:MM:SS]
+                    match = re.search(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]', line)
+                    if match:
+                        timestamp_str = match.group(1)
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    # Try pattern 2: Timestamp: YYYY-MM-DD HH:MM:SS
+                    if not timestamp:
+                        match = re.search(r'Timestamp:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+                        if match:
+                            timestamp_str = match.group(1)
+                            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    # Try pattern 3: Completed at: YYYY-MM-DD HH:MM:SS
+                    if not timestamp:
+                        match = re.search(r'Completed at:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+                        if match:
+                            timestamp_str = match.group(1)
+                            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    # Try pattern 4: Started at: YYYY-MM-DD HH:MM:SS
+                    if not timestamp:
+                        match = re.search(r'Started at:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+                        if match:
+                            timestamp_str = match.group(1)
+                            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+
+                    
+                    if timestamp:
+                        if first_timestamp is None:
+                            first_timestamp = timestamp
+                        last_timestamp = timestamp
+            
+            if first_timestamp and last_timestamp:
+                duration = (last_timestamp - first_timestamp).total_seconds()
+                return duration
+        except Exception as e:
+            print(f"  Error extracting execution time from {log_file}: {e}")
+        
+        return 0
+
+
+    def _extract_token_usage_from_log(self, log_file: str) -> Dict:
+        """
+        Extract token usage from opencode stats section in log file.
+        """
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Get last occurrence of stats section
+            parts = content.split('Usage Statistics (opencode stats)')
+            if len(parts) < 2:
+                return {
+                    'total_tokens_in': 0,
+                    'total_tokens_out': 0,
+                    'total_cost': 0.0,
+                    'cache_read': 0,
+                    'cache_write': 0
+                }
+            
+            stats = parts[-1]
+            
+            # Parse Input (e.g., "│Input 196.6K │")
+            input_match = re.search(r'│\s*Input\s+([\d.]+)([KMB]?)', stats)
+            tokens_in = float(input_match.group(1)) * {'K': 1000, 'M': 1000000, 'B': 1000000000}.get(input_match.group(2), 1) if input_match else 0
+            
+            # Parse Output (e.g., "│Output 2.8K │")
+            output_match = re.search(r'│\s*Output\s+([\d.]+)([KMB]?)', stats)
+            tokens_out = float(output_match.group(1)) * {'K': 1000, 'M': 1000000, 'B': 1000000000}.get(output_match.group(2), 1) if output_match else 0
+            
+            # Parse Cache Read (e.g., "│Cache Read 245.4K │")
+            cache_read_match = re.search(r'│\s*Cache Read\s+([\d.]+)([KMB]?)', stats)
+            cache_read = float(cache_read_match.group(1)) * {'K': 1000, 'M': 1000000, 'B': 1000000000}.get(cache_read_match.group(2), 1) if cache_read_match else 0
+            
+            # Parse Cache Write (e.g., "│Cache Write 0 │")
+            cache_write_match = re.search(r'│\s*Cache Write\s+([\d.]+)([KMB]?)', stats)
+            cache_write = float(cache_write_match.group(1)) * {'K': 1000, 'M': 1000000, 'B': 1000000000}.get(cache_write_match.group(2), 1) if cache_write_match else 0
+            
+            # Parse Total Cost (e.g., "│Total Cost $0.02 │")
+            cost_match = re.search(r'│\s*Total Cost\s+\$?([\d.]+)', stats)
+            cost = float(cost_match.group(1)) if cost_match else 0.0
+            
+            return {
+                'total_tokens_in': int(tokens_in),
+                'total_tokens_out': int(tokens_out),
+                'total_cost': cost,
+                'cache_read': int(cache_read),
+                'cache_write': int(cache_write)
+            }
+        except Exception as e:
+            print(f"  Error reading log file {log_file}: {e}")
+            return {
+                'total_tokens_in': 0,
+                'total_tokens_out': 0,
+                'total_cost': 0.0,
+                'cache_read': 0,
+                'cache_write': 0
+            }
+
+
+
+    def _collect_stage_token_metrics(self, stage_name: str, log_files: List[Path]) -> Dict:
+        """
+        Aggregate token usage from multiple log files.
+        
+        Args:
+            stage_name: Name of the stage (for logging purposes)
+            log_files: List of log file paths to aggregate
+            
+        Returns:
+            Dictionary with total_tokens_in, total_tokens_out, total_cost, cache_read, and cache_write
+        """
+        total_tokens_in = 0
+        total_tokens_out = 0
+        total_cost = 0.0
+        total_cache_read = 0
+        total_cache_write = 0
+        
+        for log_file in log_files:
+            metrics = self._extract_token_usage_from_log(str(log_file))
+            total_tokens_in += metrics['total_tokens_in']
+            total_tokens_out += metrics['total_tokens_out']
+            total_cost += metrics['total_cost']
+            total_cache_read += metrics['cache_read']
+            total_cache_write += metrics['cache_write']
+        
+        return {
+            'total_tokens_in': total_tokens_in,
+            'total_tokens_out': total_tokens_out,
+            'total_cost': total_cost,
+            'cache_read': total_cache_read,
+            'cache_write': total_cache_write
+        }
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in seconds to human-readable format."""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        
+        if hours > 0:
+            return f"{hours}h {minutes}m {secs}s"
+        elif minutes > 0:
+            return f"{minutes}m {secs}s"
+        else:
+            return f"{secs}s"
 
 
 def main():
