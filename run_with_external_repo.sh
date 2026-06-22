@@ -400,7 +400,7 @@ if [ "$RUN_GENERATE" = true ]; then
         if [ -n "$STEP" ]; then
             python3 "${SCRIPT_DIR}/run_pipeline.py" --step "$STEP"
         else
-            "${SCRIPT_DIR}/run.sh"
+            "${SCRIPT_DIR}/run.sh" local
         fi
 
         echo ""

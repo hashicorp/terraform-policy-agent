@@ -16,7 +16,7 @@ Your workspace should contain:
 $ ls
 README.md           run.sh              stop.sh
 sample-data/        run_pipeline.py     skills/
-.env.example        run_with_external_repo.sh
+.env.example
 ```
 
 ### 2. Prerequisites
@@ -31,7 +31,7 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.24
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.25
 ```
 
 **Required Binaries**:
@@ -69,11 +69,18 @@ Download the following **Linux** binaries (used inside the container). The archi
     docker.io/hashicorp/terraform-mcp-server:0.3.3
   ```
   
-  **Verify connectivity from the terraform-pac-agent container:**
+  **Verify connectivity:**
   
+  Using pre-flight check:
+  ```bash
+  # Check MCP server only
+  ./pre-check.sh mcp
+  ```
+  
+  Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/polaris-20251120/terraform-pac-agent:0.0.24 \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.25 \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -136,7 +143,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.24 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.25 \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -169,8 +176,18 @@ MODEL_BASE_URL=https://your-litellm-endpoint.com
 MODEL_NAME=aws/claude-sonnet-4-5
 MODEL_API_KEY=sk-your-litellm-api-key
 
-# Data directories
-DATA_DIR=./data  # Create this from sample-data/ or your own structure
+# Binaries (required - must match container architecture)
+# M1/M2 Mac: use linux-arm64 binaries
+# Intel Mac/Linux: use linux-amd64 binaries
+TERRAFORM_BINARY_PATH=/path/to/terraform
+TFPOLICY_BINARY_PATH=/path/to/tfpolicy
+
+# External Repository Path (Primary use case)
+# Set this to convert Sentinel policies from an external repository
+EXTERNAL_REPO_DIR=/path/to/your/sentinel-repository
+
+# Data directories (used when EXTERNAL_REPO_DIR is not set)
+DATA_DIR=./data
 INPUT_DIR=input
 INPUT_FILE=policy_goal.txt
 OUTPUT_DIR=output
@@ -178,13 +195,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.24
-
-# Binaries (required - must match container architecture)
-# M1/M2 Mac: use linux-arm64 binaries
-# Intel Mac/Linux: use linux-amd64 binaries
-TERRAFORM_BINARY_PATH=/path/to/terraform
-TFPOLICY_BINARY_PATH=/path/to/tfpolicy
+IMAGE_TAG=0.0.25
 
 # Stage 0: Extraction timeout
 STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
@@ -193,16 +204,104 @@ STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
 STAGE1_TIMEOUT=300  # Optional, defaults to 300 (5 minutes)
 
 # Stage 2: Policy Generation timeout (per policy)
-STAGE2_TIMEOUT=900  # Optional, defaults to 600 (10 minutes)
-# Note: For complex policies, consider increasing to 900 or more (15 minutes)
+STAGE2_TIMEOUT=900  # Optional, defaults to 900 (15 minutes)
 
 # Stage 3: Summary Generation timeout
-# Total timeout = STAGE3_TIMEOUT_BASE + (policy_count * STAGE3_TIMEOUT_PER_POLICY)
 STAGE3_TIMEOUT_BASE=180  # Optional, defaults to 180 (3 minutes base)
 STAGE3_TIMEOUT_PER_POLICY=60  # Optional, defaults to 60 (1 minute per policy)
 ```
 
-### 4. Prepare Data Directory
+## Usage
+
+### Pre-flight Check (Recommended)
+
+Before running the pipeline, verify all prerequisites are met:
+
+```bash
+# Check all prerequisites
+./pre-check.sh
+
+# Or check specific components
+./pre-check.sh docker    # Docker daemon only
+./pre-check.sh mcp       # MCP server only
+./pre-check.sh binaries  # terraform/tfpolicy binaries only
+./pre-check.sh env       # Environment variables only
+
+# JSON output for automation
+./pre-check.sh --json
+./pre-check.sh mcp --json
+```
+
+Note: `pre-check.sh` automatically detects and uses the available Python interpreter (`python3` or `python`).
+
+The pre-flight check will verify:
+- 🟢 **docker**: Docker daemon is running
+- 🟢 **env**: Environment variables are properly configured
+- 🟢 **binaries**: terraform and tfpolicy binaries are available and executable
+- 🟢 **input**: Input files exist
+- 🟢 **image**: Docker image is available
+- 🟢 **mcp**: MCP server is accessible at localhost:8500
+
+If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
+
+### Primary Use Case: External Repository Integration
+
+To convert Sentinel libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
+
+Example repository: https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/tree/main/policies/cloudtrail
+
+**Step 1: Download or clone the external repository**
+
+```bash
+# Option A: Download and extract
+curl -L https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/archive/refs/heads/main.zip -o repo.zip
+unzip repo.zip -d /tmp
+
+# Option B: Clone the repository
+git clone https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform.git /tmp/sentinel-repo
+```
+
+**Step 2: Set the external repository path in `.env`**
+
+```bash
+EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail
+```
+
+**Step 3: Run the pipeline**
+
+```bash
+./run.sh  # Auto-detects external mode when EXTERNAL_REPO_DIR is set
+```
+
+Or explicitly specify external mode:
+```bash
+./run.sh external  # Force external mode
+```
+
+The script automatically:
+- Detects `EXTERNAL_REPO_DIR` is set and runs in external mode
+- Extracts Sentinel files from the repository
+- Creates timestamped directories (`data/input-YYYYMMDD_HHMMSS/`, `data/output-YYYYMMDD_HHMMSS/`)
+- Generates policies
+- Deploys results to `EXTERNAL_REPO_DIR/tfpolicy/`
+
+Example output structure:
+
+```
+/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail/tfpolicy
+├── cloudtrail-bucket-access-logging-enabled/
+│   ├── cloudtrail-bucket-access-logging-enabled.policy.hcl
+│   ├── cloudtrail-bucket-access-logging-enabled.policytest.hcl
+│   ├── cloudtrail-bucket-access-logging-enabled.report.md
+│   └── cloudtrail-bucket-access-logging-enabled.tf
+└── ...
+```
+
+### Alternative: Local Mode (Manual Preparation)
+
+If you don't have an external repository or want to manually prepare input files:
+
+**Step 1: Prepare Data Directory**
 
 Create your `data/` directory structure. You can either:
 
@@ -217,7 +316,7 @@ mkdir -p data/input
 # Then create your input files
 ```
 
-### 5. Create Input File
+**Step 2: Create Input File**
 
 Create `data/input/policy_goal.txt` with your Sentinel policy:
 
@@ -246,15 +345,30 @@ Generate TF Policy for
 ./data/input/sentinels/policy2.sentinel
 ```
 
-### 6. Run Pipeline
+**Step 3: Ensure EXTERNAL_REPO_DIR is NOT set in `.env`**
+
+Comment out or remove the `EXTERNAL_REPO_DIR` line in your `.env` file:
 
 ```bash
-./run.sh
+# EXTERNAL_REPO_DIR=/path/to/your/sentinel-repository
 ```
+
+**Step 4: Run the pipeline**
+
+```bash
+./run.sh  # Auto-detects local mode when EXTERNAL_REPO_DIR is not set
+```
+
+Or explicitly specify local mode:
+```bash
+./run.sh local  # Force local mode (ignores EXTERNAL_REPO_DIR even if set)
+```
+
+The script will automatically detect that `EXTERNAL_REPO_DIR` is not set and run in local mode.
 
 **Output:**
 
-When using `run.sh`, output files are generated in the directory specified by `OUTPUT_DIR` in your `.env` file (default: `data/output`):
+Output files are generated in the directory specified by `OUTPUT_DIR` in your `.env` file (default: `data/output`):
 
 ```sh
 $ ls ./data/output
@@ -263,81 +377,6 @@ stage0_extraction.log       stage3_summary.log      summary.md
 ```
 
 **Important:** The `OUTPUT_DIR` must be empty before running the full pipeline to prevent accidental overwrites. If you need to run multiple conversions, set a different `OUTPUT_DIR` in `.env` for each run (e.g., `OUTPUT_DIR=output-v2`, `OUTPUT_DIR=results-20260603`).
-
-### 7. Run with External Repository (Alternative)
-
-If you want to convert Sentinel libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
-
-Example repository: https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/tree/main/policies/cloudtrail
-
-**Step 1: Download the external repository**
-
-```bash
-curl -L https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/archive/refs/heads/main.zip | tar xz -C /tmp
-```
-
-**Step 2: Verify the repository structure**
-
-```bash
-$ ls /tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main
-CONTRIBUTING.md LICENSE         modules         README.md
-docs            Makefile        policies        sentinel.hcl
-```
-
-**Step 3: Set the external repository path in `.env`**
-
-For example, if you want to convert `policies/cloudtrail`:
-
-```bash
-EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail
-```
-
-**Step 4: Run the pipeline with the external repository**
-
-```bash
-./run_with_external_repo.sh
-```
-
-**Output:**
-
-When using `run_with_external_repo.sh`, the script automatically creates timestamped directories for each run:
-- Input: `data/input-YYYYMMDD_HHMMSS/`
-- Output: `data/output-YYYYMMDD_HHMMSS/`
-
-**Note:** The `OUTPUT_DIR` setting in `.env` is **ignored** when using `run_with_external_repo.sh`. This automatic timestamping prevents conflicts when processing multiple batches and allows you to keep historical results.
-
-The final converted policies will be created under `EXTERNAL_REPO_DIR/tfpolicy`, with each Sentinel policy having a corresponding Terraform policy directory.
-
-Example output structure:
-
-```
-/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail/tfpolicy
-├── cloudtrail-bucket-access-logging-enabled
-│   ├── cloudtrail-bucket-access-logging-enabled.policy.hcl
-│   ├── cloudtrail-bucket-access-logging-enabled.policytest.hcl
-│   ├── cloudtrail-bucket-access-logging-enabled.report.md
-│   └── cloudtrail-bucket-access-logging-enabled.tf
-├── cloudtrail-cloudwatch-logs-group-arn-present
-│   ├── cloudtrail-cloudwatch-logs-group-arn-present.policy.hcl
-│   ├── cloudtrail-cloudwatch-logs-group-arn-present.policytest.hcl
-│   ├── cloudtrail-cloudwatch-logs-group-arn-present.report.md
-│   └── cloudtrail-cloudwatch-logs-group-arn-present.tf
-├── cloudtrail-log-file-validation-enabled
-│   ├── cloudtrail-log-file-validation-enabled.policy.hcl
-│   ├── cloudtrail-log-file-validation-enabled.policytest.hcl
-│   ├── cloudtrail-log-file-validation-enabled.report.md
-│   └── cloudtrail-log-file-validation-enabled.tf
-├── cloudtrail-logs-bucket-not-public
-│   ├── cloudtrail-logs-bucket-not-public.policy.hcl
-│   ├── cloudtrail-logs-bucket-not-public.policytest.hcl
-│   ├── cloudtrail-logs-bucket-not-public.report.md
-│   └── cloudtrail-logs-bucket-not-public.tf
-└── cloudtrail-server-side-encryption-enabled
-    ├── cloudtrail-server-side-encryption-enabled.policy.hcl
-    ├── cloudtrail-server-side-encryption-enabled.policytest.hcl
-    ├── cloudtrail-server-side-encryption-enabled.report.md
-    └── cloudtrail-server-side-encryption-enabled.tf
-```
 
 ## Pipeline Stages
 
@@ -411,24 +450,34 @@ The skill will then guide the workflow in this order:
    - Check required binaries (terraform, tfpolicy)
    - Validate MCP server connection
 3. **Pipeline run**
-   - Show how to execute the conversion pipeline with `./run.sh` or `./run_with_external_repo.sh`
+   - Show how to execute the conversion pipeline with `./run.sh`
 
 
 ## Advanced Usage
 
-### Run Individual Stages
+### Run Specific Steps (Local Mode)
 
 ```bash
-./run.sh step0-extraction
-./run.sh step1-requirement --goal-file goal-001.txt
-./run.sh step2-generation --policy-dir CloudFront_Associated_WAF
-./run.sh step3-summary
+./run.sh local --step 0
+./run.sh local --step 1 --goal-file goal-001.txt
+./run.sh local --step 2 --policy-dir CloudFront_Associated_WAF
+./run.sh local --step 3
 ```
 
-### Custom Prompts
+### Run Specific Phases (External Mode)
 
 ```bash
-./run.sh step0-extraction --prompt "Extract goals from input file"
+./run.sh external --phase preprocess    # Extract only
+./run.sh external --phase generate      # Generate only
+./run.sh external --phase postprocess   # Deploy only
+```
+
+### Help
+
+```bash
+./run.sh --help
+./run.sh local --help
+./run.sh external --help
 ```
 
 ### Pipeline Fails
