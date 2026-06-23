@@ -2,7 +2,7 @@
 
 ## Table of Contents
 1. [Overview](#overview)
-2. [Prerequisites (Manual Setup)](#prerequisites-mannualy)
+2. [Prerequisites (Manual Setup)](#prerequisites-manual-setup)
 3. [Setup (Using tfpac-setup Skill)](#setup-using-tfpac-setup-skill)
 4. [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill)
 5. [Understanding the Output](#understanding-the-output)
@@ -22,7 +22,7 @@ The Terraform Policy Agent is a tool that automatically converts Sentinel polici
 - Validates the converted policies
 
 **Workflow Overview:**
-1. First, complete the [Prerequisites (Manual Setup)](#prerequisites-mannualy) to prepare your environment
+1. First, complete the [Prerequisites (Manual Setup)](#prerequisites-manual-setup) to prepare your environment
 2. Next, use the [Setup (Using tfpac-setup Skill)](#setup-using-tfpac-setup-skill) to create the `.env` configuration file
 3. Finally, use the [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill) to execute the Terraform Policy Agent
 
@@ -221,23 +221,27 @@ Here, select the recommended Docker image (1. Yes). If the Docker image is not a
 
 ![Local or External](photo/setup/(5)local_or_external.png)
 
-Here, select "2. Local Mode" to use the `data/input` directory that you copied in [Prerequisites (Manual Setup)](#prerequisites-mannualy).
+Here, select "2. Local Mode" to use the `data/input` directory that you copied in [Step 5: Prepare Conversion Data](#step-5-prepare-conversion-data) of [Prerequisites (Manual Setup)](#prerequisites-manual-setup).
 
 ### Step 6: Configure Terraform binary path
 
 ![Terraform Binary](photo/setup/(6)terraform_binary.png)
 
-Here, select "2. Type your own answer" and enter the path to your Terraform binary that you saved in [Step 4: Prepare Required Binaries](#step-4-prepare-required-binaries) of [Prerequisites (Manual Setup)](#prerequisites-mannualy).
+Here, select "2. Type your own answer" and enter the path to your Terraform binary that you saved in [Step 4: Prepare Required Binaries](#step-4-prepare-required-binaries) of [Prerequisites (Manual Setup)](#prerequisites-manual-setup).
 
 Example: `/Users/<your-username>/terraform-binaries/terraform`
+
+**Note:** Replace `<your-username>` with your actual username.
 
 ### Step 7: Configure TFPolicy binary path
 
 ![TFPolicy Binary](photo/setup/(7)tfpolicy_binary.png)
 
-Here, select "2. Type your own answer" and enter the path to your TFPolicy binary that you saved in [Step 4: Prepare Required Binaries](#step-4-prepare-required-binaries) of [Prerequisites (Manual Setup)](#prerequisites-mannualy).
+Here, select "2. Type your own answer" and enter the path to your TFPolicy binary that you saved in [Step 4: Prepare Required Binaries](#step-4-prepare-required-binaries) of [Prerequisites (Manual Setup)](#prerequisites-manual-setup).
 
 Example: `/Users/<your-username>/terraform-binaries/tfpolicy`
+
+**Note:** Replace `<your-username>` with your actual username.
 
 ### Step 8: Select authentication provider
 
@@ -273,21 +277,24 @@ Confirm that all required components (Docker, MCP server, binaries, and so on) a
 
 ![Preview Environment](photo/setup/(13)preview_env.png)
 
-Review the generated `.env` file content before saving. Verify all settings are correct and note placeholders for secret values that need manual input.
+Review the generated `.env` file content before saving. If there are no issues with the configuration, select "yes" to save.
 
-### Step 14: Confirm save operation
 
-![Save Confirmation](photo/setup/(14)save_or_not.png)
+### Step 14: Setup completion and next steps
 
-Confirm whether to save the configuration to the `.env` file. If the file already exists, you'll be asked whether to overwrite it. If there are no issues with the configuration, select "yes".
-
-### Step 15: Setup completion and next steps
-
-![Final Report](photo/setup/(15)final_report.png)
+![Final Report](photo/setup/(14)final_report.png)
 
 Review the setup completion report showing configuration summary and next steps.
 
-**Important:** Remember to manually fill in secret values (API keys, tokens) marked as `<PLEASE_FILL_IN_MANUALLY>` in the `.env` file after this setup.
+**Important:** After this setup, manually fill in secret values marked as `<PLEASE_FILL_IN_MANUALLY>` in the `.env` file:
+
+- **For LiteLLM:** API key and endpoint URL
+  
+  ![LiteLLM Configuration](photo/setup/litellm.png)
+
+- **For GitHub Copilot:** Access token
+  
+  ![GitHub Copilot Configuration](photo/setup/github_copilot.png)
 
 
 ## Run (Using tfpac-run Skill)
