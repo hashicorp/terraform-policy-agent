@@ -327,31 +327,31 @@ Here, select "1. Convert from Sentinel - Manual Setup".
 
 ![Output Cleanup](photo/run/(5)output_cleanup.png)
 
-If an output directory exists, you will be asked what to do with it. Choose to create a backup or cleanup to avoid conflicts.
+If an output directory exists, you will be asked what to do with it. Choose to create a backup and cleanup (2. Backup and clean) or cleanup (3. Clean up) to avoid conflicts.
 
 ### Step 6: Pipeline execution starts
 
 ![Run Script](photo/run/(6)run.sh.png)
 
-The `run.sh` script begins executing the policy conversion pipeline.
+Here, select "2. Yes, execute". Then, `run.sh` script begins executing the policy conversion pipeline.
 
 ### Step 7: Select reporting time interval
 
 ![Time Selection](photo/run/(7)time_selection.png)
 
-Select the time interval for reporting the process status.
+Here, select "2. 60 seconds". This is the time interval for reporting the process status.
 
 ### Step 8: Interim progress report
 
 ![Interim Report](photo/run/(8)interim_report.png)
 
-The system provides interim reports to inform you of the current execution status, showing completed stages and progress.
+The system provides interim reports at the interval you selected in the previous step, informing you of the current execution status, showing completed stages and progress.
 
 ### Step 9: Final conversion report
 
 ![Final Report](photo/run/(9)final_report.png)
 
-Review the final report showing all converted policies, success rates, and any issues encountered.
+Review the final report showing all converted policies, whether the conversion succeeded, test case evaluation results, and any issues encountered.
 
 
 ---
@@ -435,7 +435,7 @@ STAGE3_TIMEOUT_PER_POLICY=120  # 2 minutes per policy
 
 #### Method 1: Convert Inline Sentinel Code (local)
 
-Edit `data/input/policy_goal.txt` with your Sentinel policy:
+1. Edit `data/input/policy_goal.txt` with your Sentinel policy:
 
 ````
 Generate TF Policy for
@@ -454,14 +454,14 @@ main = rule {
 ```
 ````
 
+2. Run the tfpac-run skill again following the instructions in [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill).
 
 ---
 
 #### Method 2: Convert from Sentinel Files (local)
 
-If you have existing Sentinel files:
-
 1. Place your `.sentinel` files in `data/input/sentinels/`
+
 2. Edit `data/input/policy_goal.txt`:
 
 ```
@@ -470,31 +470,27 @@ Generate TF Policy for
 ./data/input/sentinels/policy2.sentinel
 ```
 
-3. Run the pipeline:
-
-```bash
-./run.sh
-```
+3. Run the tfpac-run skill again following the instructions in [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill).
 
 ---
 
 #### Method 3: Convert External Repository (external)
 
-To convert policies from an external repository (e.g., HashiCorp's CIS Policy Set):
-
-**Step 1:** Download the repository:
+1. Download the repository:
 
 ```bash
 curl -L https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/archive/refs/heads/main.zip | tar xz -C /tmp
 ```
 
-**Step 2:** Configure the external repository path in `.env`:
+2. Configure the external repository path in `.env`:
 
 ```bash
 EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail
 ```
 
-この場合は、localではなくChoose data source locationで、externalを選択しなければいけない。
+3. Run the tfpac-run skill again following the instructions in [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill).
+
+   **Note:** In [Step 4: Choose data source location](#step-4-choose-data-source-location), select "2. Convert from Sentinel - External Repository" instead of "1. Convert from Sentinel - Manual setup".
 
 
 ### Fine-Grained Execution
