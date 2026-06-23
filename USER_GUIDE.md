@@ -253,31 +253,31 @@ Choose your authentication method: LiteLLM (for enterprise endpoints) or GitHub 
 
 ![Pipeline Config](photo/setup/(9)pipeline_config.png)
 
-For this guide, select the default (1. No). You can optionally customize pipeline settings such as data directories, input/output paths, and maximum workers for parallel processing.
+Here, select the default (1. No). You can optionally customize pipeline settings such as data directories, input/output paths, and maximum workers for parallel processing.
 
 ### Step 10: Additional Docker settings
 
 ![Additional Docker](photo/setup/(10)additinal_docker.png)
 
-For this guide, select the default (1. No). You can optionally configure additional Docker settings like container prefix.
+Here, select the default (1. No). You can optionally configure additional Docker settings like container prefix.
 
 ### Step 11: Timeout configuration
 
 ![Timeout Settings](photo/setup/(11)timeout.png)
 
-For this guide, select the default (1. No). You can optionally adjust timeout values for each pipeline stage based on your policy complexity and processing requirements. Try with default values first - they should work for most cases.
+Here, select the default (1. No). You can optionally adjust timeout values for each pipeline stage based on your policy complexity and processing requirements. Try with default values first - they should work for most cases.
 
 ### Step 12: Configuration validation
 
 ![Configuration Check](photo/setup/(12)check.png)
 
-Confirm that all required components (Docker, MCP server, binaries, and so on) are properly configured and accessible, before creating the `.env` file.
+Confirm that all required components (Docker, MCP server, binaries, and so on) are properly configured and accessible, before creating the `.env` file. If everything looks good, select "1. Yes" to proceed.
 
 ### Step 13: Preview generated .env file
 
 ![Preview Environment](photo/setup/(13)preview_env.png)
 
-Review the generated `.env` file content before saving. If there are no issues with the configuration, select "yes" to save.
+Review the generated `.env` file content before saving. If there are no issues with the configuration, select "1. Yes" to save.
 
 
 ### Step 14: Setup completion and next steps
