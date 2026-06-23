@@ -3,7 +3,7 @@
 ## Table of Contents
 1. [Overview](#overview)
 2. [Prerequisites](#prerequisites)
-3. [Setup (Using tfpac-setup Skill)](#setup-using-tfpac-setup-skill)
+3. [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill)
 4. [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill)
 5. [Understanding the Output](#understanding-the-output)
 6. [Advanced Usage](#advanced-usage)
@@ -23,7 +23,7 @@ The Terraform Policy Agent is a tool that automatically converts Sentinel polici
 
 **Workflow Overview:**
 1. First, complete the [Prerequisites](#prerequisites) to prepare your environment
-2. Next, use the [Setup (Using tfpac-setup Skill)](#setup-using-tfpac-setup-skill) to create the `.env` configuration file
+2. Next, use the [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill) to create the `.env` configuration file
 3. Finally, use the [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill) to execute the Terraform Policy Agent
 
 **Time to complete:** Approximately 30 minutes for first-time setup
@@ -145,7 +145,7 @@ mkdir -p ~/terraform-binaries
 # Copy your downloaded binaries here
 ```
 
-**Note:** Remember this location, as you will need to specify these paths in [Step 13: Configure Terraform binary path](#step-13-configure-terraform-binary-path) and [Step 14: Configure TFPolicy binary path](#step-14-configure-tfpolicy-binary-path) during the [Setup (Using tfpac-setup Skill)](#setup-using-tfpac-setup-skill).
+**Note:** Remember this location, as you will need to specify these paths in [Step 13: Configure Terraform binary path](#step-13-configure-terraform-binary-path) and [Step 14: Configure TFPolicy binary path](#step-14-configure-tfpolicy-binary-path) during the [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill).
 
 ### Step 6: Prepare Conversion Data
 
@@ -187,7 +187,7 @@ cp -R skills/tfpac-run .github/skills/
 
 
 
-## Setup (Using tfpac-setup Skill)
+## Agent Setup (Using tfpac-setup Skill)
 
 This section demonstrates the actual tfpac-setup Skill execution using OpenCode. Since this is an AI Agent, you may notice minor differences between the screenshots and your execution results, but the overall flow is expected to be the same.
 
