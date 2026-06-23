@@ -321,41 +321,35 @@ Press Enter in this state to execute the skill.
 
 ![Local or External](photo/run/(4)local_or_external.png)
 
-Here, select "1. Manual setup".
+Here, select "1. Convert from Sentinel - Manual Setup".
 
-### Step 5: Pre-execution checks
+### Step 5: Output directory cleanup
 
-![Pre-check](photo/run/(5)precheck.png)
-
-The system performs pre-execution checks to verify all requirements are met before starting the conversion.
-
-### Step 6: Output directory cleanup
-
-![Output Cleanup](photo/run/(6)output_cleanup.png)
+![Output Cleanup](photo/run/(5)output_cleanup.png)
 
 If an output directory exists, you will be asked what to do with it. Choose to create a backup or cleanup to avoid conflicts.
 
-### Step 7: Pipeline execution starts
+### Step 6: Pipeline execution starts
 
-![Run Script](photo/run/(7)run.sh.png)
+![Run Script](photo/run/(6)run.sh.png)
 
 The `run.sh` script begins executing the policy conversion pipeline.
 
-### Step 8: Select reporting time interval
+### Step 7: Select reporting time interval
 
-![Time Selection](photo/run/(8)time_selection.png)
+![Time Selection](photo/run/(7)time_selection.png)
 
 Select the time interval for reporting the process status.
 
-### Step 9: Interim progress report
+### Step 8: Interim progress report
 
-![Interim Report](photo/run/(9)interim_report.png)
+![Interim Report](photo/run/(8)interim_report.png)
 
 The system provides interim reports to inform you of the current execution status, showing completed stages and progress.
 
-### Step 10: Final conversion report
+### Step 9: Final conversion report
 
-![Final Report](photo/run/(10)final_report.png)
+![Final Report](photo/run/(9)final_report.png)
 
 Review the final report showing all converted policies, success rates, and any issues encountered.
 
