@@ -331,7 +331,7 @@ If an output directory exists, you will be asked what to do with it. Choose to c
 
 ![Run Script](photo/run/(6)run.sh.png)
 
-Here, select "2. Yes, execute". Then, `run.sh` script begins executing the policy conversion pipeline.
+Here, select "1. Yes, execute". Then, `run.sh` script begins executing the policy conversion pipeline.
 
 ### Step 28: Select reporting time interval
 
@@ -390,7 +390,7 @@ data/output/
 
 ### Reviewing Conversion Results
 
-#### Step 31: Check the Summary Report
+#### 1. Check the Summary Report
 
 Open `data/output/summary.md` to get an overview of all conversions:
 
@@ -398,7 +398,7 @@ Open `data/output/summary.md` to get an overview of all conversions:
 - **Policy List:** Each policy's name, status, and key metrics
 - **Quick Status:** See which policies succeeded or failed at a glance
 
-#### Step 32: Review Individual Policy Reports
+#### 2. Review Individual Policy Reports
 
 For detailed information about each policy, check the `report.md` file in each policy directory:
 
