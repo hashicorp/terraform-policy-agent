@@ -327,6 +327,8 @@ Here, select "1. Convert from Sentinel - Manual Setup".
 
 If an output directory exists, you will be asked what to do with it. Choose to create a backup and cleanup (2. Backup and clean) or cleanup (3. Clean up) to avoid conflicts.
 
+**Note:** On first execution, the output directory is empty, so this step will be skipped.
+
 ### Step 27: Pipeline execution starts
 
 ![Run Script](photo/run/(6)run.sh.png)
