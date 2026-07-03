@@ -4,13 +4,7 @@
 
 ### 1. Setup Workspace
 
-Clone the repository:
-
-```bash
-git clone https://github.com/hashicorp/terraform-policy-agent.git
-cd terraform-policy-agent
-```
-
+Prepare this folder.
 Your workspace should contain:
 ```sh
 $ ls
