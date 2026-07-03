@@ -33,7 +33,7 @@ The Terraform Policy Agent is a tool that automatically converts Sentinel polici
 ## Prerequisites
 
 **Before using the skills, you must complete the following steps manually:**
-- Step 1: Clone the Repository
+- Step 1: Extract the Package
 - Step 2: Prepare Coding Agent
 - Step 3: Install Docker
 - Step 4: Setup MCP Server
@@ -41,7 +41,7 @@ The Terraform Policy Agent is a tool that automatically converts Sentinel polici
 - Step 6: Prepare Conversion Data
 - Step 7: Copy Skills to Designated Location
 
-### Step 1: Clone the Repository
+### Step 1: Extract the Package
 
 Place the received `.tar.gz` file in your working directory, then run:
 
@@ -292,6 +292,27 @@ Review the setup completion report showing configuration summary and next steps.
   ![LiteLLM Configuration](photo/setup/litellm.png)
 
 - **For GitHub Copilot:** Access token
+
+  Run this command to authenticate and retrieve your GitHub Copilot tokens:
+
+  ```bash
+  docker run --rm -it --entrypoint "" \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
+    sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
+  ```
+
+  **Follow the prompts:**
+  1. Select "GitHub Copilot" as provider
+  2. Choose deployment type (usually "GitHub.com")
+  3. Open the displayed URL in your browser
+  4. Enter the device code shown
+  5. Authorize the application
+
+  If you have already authenticated on the host machine, the token is stored in the following file by default:
+
+  ```bash
+  cat ~/.local/share/opencode/auth.json
+  ```
   
   ![GitHub Copilot Configuration](photo/setup/github_copilot.png)
 
