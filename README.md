@@ -1,435 +1,480 @@
-# Terraform Policy Agent - User Guide
+# terraform-pac-agent Quick Start Guide
 
-## Table of Contents
-1. [Overview](#overview)
-2. [Prerequisites](#prerequisites)
-3. [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill)
-4. [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill)
-5. [Understanding the Output](#understanding-the-output)
-6. [Advanced Usage](#advanced-usage)
-7. [Troubleshooting](#troubleshooting)
+## Getting Started
 
----
+### 1. Setup Workspace
 
-## Overview
-
-The Terraform Policy Agent is a tool that automatically converts Sentinel policies to Terraform Policy (TFPolicy) format. This guide will walk you through the complete setup and usage process, by using a coding agent like OpenCode or GitHub Copilot CLI.
-
-**What Terraform Policy Agent does:**
-- Converts Sentinel policy code to TFPolicy format
-- Generates test cases automatically
-- Creates comprehensive documentation
-- Validates the converted policies
-
-**Workflow Overview:**
-1. First, complete the [Prerequisites](#prerequisites) to prepare your environment
-2. Next, use the [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill) to create the `.env` configuration file
-3. Finally, use the [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill) to execute the Terraform Policy Agent
-
-**Time to complete:** Approximately 30 minutes for first-time setup
-
----
-
-## Prerequisites
-
-**Before using the skills, you must complete the following steps manually:**
-- Step 1: Clone the Repository
-- Step 2: Prepare Coding Agent
-- Step 3: Install Docker
-- Step 4: Setup MCP Server
-- Step 5: Prepare Required Binaries
-- Step 6: Prepare Conversion Data
-- Step 7: Copy Skills to Designated Location
-
-### Step 1: Clone the Repository
-
-Place the received `.tar.gz` file in your working directory, then run:
-
-```bash
-# Extract the package
-tar zxvf terraform-policy-agent.tar.gz
-cd terraform-policy-agent
-```
-
-**Expected result:**
-```
+Prepare this folder.
+Your workspace should contain:
+```sh
 $ ls
-README.md                       pre-check.sh                    run_with_local_preparation.sh
-USER_GUIDE.md                   pre_check.py                    sample-data
-append_footer.py                run.sh                          skills
-file_footer.hcl.template        run_pipeline.py                 stop.sh
-github-copilot-access-setup.png run_with_external_repo.sh
+README.md           run.sh              stop.sh
+sample-data/        run_pipeline.py     skills/
+.env.example
 ```
 
+### 2. Prerequisites
 
-### Step 2: Prepare Coding Agent
+The agent runs in a container, so you'll need `docker` available on your system.
 
-If you don't have a coding agent yet, install and set up one:
+**Docker Image**:
 
-**Option A: OpenCode**
-
-Download: https://opencode.ai/download
-
-Launch:
-```bash
-opencode
-```
-
-**Option B: GitHub Copilot CLI**
-
-Installation guide: https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli
-
-Launch:
-```bash
-copilot
-```
-
-### Step 3: Install Docker
-
-If you don't have Docker yet, install it on your system:
-
-**Option A: Docker Desktop**
-- Download: https://www.docker.com/products/docker-desktop
-
-**Option B: Rancher Desktop**
-- Download: https://rancherdesktop.io/
-
-**Verify installation:**
-```bash
-docker --version
-```
-
-
-### Step 4: Setup MCP Server
-The agent requires a running MCP (Model Context Protocol) server for Terraform operations.
-
-**Pull and run the MCP server:**
+Pull the pre-built Docker image from the registry:
 
 ```bash
-# Pull the MCP server image
-docker pull docker.io/hashicorp/terraform-mcp-server:0.3.3
-
-# Run the MCP server
-docker run -d \
-  --name terraform-mcp-server \
-  -p 8500:8080 \
-  -e TRANSPORT_MODE=streamable-http \
-  -e TRANSPORT_HOST=0.0.0.0 \
-  -e MCP_SESSION_MODE=stateless \
-  --restart unless-stopped \
-  docker.io/hashicorp/terraform-mcp-server:0.3.3
+# Login to IBM Cloud Container Registry
+docker login icr.io -u iamapikey
+# When prompted, enter your API key
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.26
 ```
 
-**Verify the server is running:**
+**Required Binaries**:
+
+Download the following **Linux** binaries (used inside the container). The architecture must match your host machine:
+
+- **Terraform CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
+  - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
+
+- **TFPolicy CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
+  - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
+
+**Required MCP Server**:
+
+- **terraform-mcp-server**: HashiCorp's MCP server for Terraform operations
+  - Must be running on `localhost:8500`
+  - For detailed setup instructions, see: [terraform-mcp-server repository](https://github.com/hashicorp/terraform-mcp-server)
+  
+  **Recommended Setup:**
+  
+  Pull and run the MCP server:
+  
+  ```bash
+  # Pull the Docker image
+  docker pull docker.io/hashicorp/terraform-mcp-server:0.3.3
+  
+  # Run the MCP server
+  docker run -d \
+    --name terraform-mcp-server \
+    -p 8500:8080 \
+    -e TRANSPORT_MODE=streamable-http \
+    -e TRANSPORT_HOST=0.0.0.0 \
+    -e MCP_SESSION_MODE=stateless \
+    --restart unless-stopped \
+    docker.io/hashicorp/terraform-mcp-server:0.3.3
+  ```
+  
+  **Verify connectivity:**
+  
+  Using pre-flight check:
+  ```bash
+  # Check MCP server only
+  ./pre-check.sh mcp
+  ```
+  
+  Or using curl from terraform-pac-agent container:
+  ```bash
+  docker run --rm -it --entrypoint "" \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
+    curl http://host.docker.internal:8500/health
+  ```
+  
+  Expected response:
+  ```json
+  {"status":"ok","service":"terraform-mcp-server","transport":"streamable-http","endpoint":"/mcp"}
+  ```
+
+### 3. Configure Environment
+
+Create `.env` file from the example:
+
+```bash
+cp .env.example .env
+# Edit .env with your configuration
+```
+
+#### Authentication Configuration
+
+Choose one of the following authentication providers:
+
+**Option A: LiteLLM (Default)**
+
+```bash
+AUTH_PROVIDER=litellm
+MODEL_BASE_URL=https://your-litellm-endpoint.com
+MODEL_NAME=aws/claude-sonnet-4-5
+MODEL_API_KEY=sk-your-litellm-api-key
+```
+
+- `AUTH_PROVIDER`: Set to `litellm`
+- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
+- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
+- `MODEL_API_KEY`: Your LiteLLM API key
+
+**Option B: GitHub Copilot**
+
+```bash
+AUTH_PROVIDER=github-copilot
+MODEL_NAME=claude-sonnet-4.6
+GITHUB_COPILOT_ACCESS_TOKEN=gho_your_access_token
+GITHUB_COPILOT_REFRESH_TOKEN=gho_your_refresh_token  # Optional, defaults to access token
+GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
+```
+
+- `AUTH_PROVIDER`: Set to `github-copilot`
+- `MODEL_NAME`: Select a GitHub Copilot supported model (e.g., `claude-sonnet-4.6`, `gpt-5.2`)
+  - Supported models (verified as of June 2026): `claude-sonnet-4.6`, `gpt-5.2`
+  - Note: `claude-sonnet-4.5` is NOT supported by GitHub Copilot (verified as of June 2026)
+  - You can switch between supported models without changing the access token
+- `GITHUB_COPILOT_ACCESS_TOKEN`: Your GitHub Copilot access token
+- `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
+- `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
+
+**How to get GitHub Copilot tokens:**
+
+**Recommended: Using Docker container (no local installation required)**
+
+Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
   icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
-  curl http://host.docker.internal:8500/health
+  sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
-**Expected response:**
-```json
-{"status":"ok","service":"terraform-mcp-server","transport":"streamable-http","endpoint":"/mcp"}
-```
+This will:
+1. Launch the OpenCode authentication flow in an isolated container
+2. Prompt you to select GitHub Copilot as the provider
+3. Choose deployment type (usually GitHub.com)
+4. Display a login URL (e.g., `https://github.com/login/device`) and code
+5. After you authorize in your browser, display the tokens from `auth.json`
 
-### Step 5: Prepare Required Binaries
-Download the Linux binaries for Terraform and TFPolicy from your HashiCorp representative.
+![GitHub Copilot Access Setup](github-copilot-access-setup.png)
 
-**Important:** The binaries must match your host architecture:
-- **M1/M2 Mac:** Use `linux-arm64` binaries
-- **Intel Mac/Linux:** Use `linux-amd64` binaries
+**Alternative: Using local OpenCode installation**
 
-Place the binaries in a known location, for example:
+If you prefer to install OpenCode locally, you can run:
+
 ```bash
-mkdir -p ~/terraform-binaries
-# Copy your downloaded binaries here
+opencode auth login
+cat ~/.local/share/opencode/auth.json
 ```
 
-**Note:** Remember this location, as you will need to specify these paths in [Step 13: Configure Terraform binary path](#step-13-configure-terraform-binary-path) and [Step 14: Configure TFPolicy binary path](#step-14-configure-tfpolicy-binary-path) during the [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill).
+Note: This requires OpenCode to be installed on your system. The container method is recommended as it keeps your system clean and isolated.
 
-### Step 6: Prepare Conversion Data
+#### Complete `.env` Example
 
-Create the data directory structure:
+```bash
+# Authentication (choose one option above)
+AUTH_PROVIDER=litellm
+MODEL_BASE_URL=https://your-litellm-endpoint.com
+MODEL_NAME=aws/claude-sonnet-4-5
+MODEL_API_KEY=sk-your-litellm-api-key
 
+# Binaries (required - must match container architecture)
+# M1/M2 Mac: use linux-arm64 binaries
+# Intel Mac/Linux: use linux-amd64 binaries
+TERRAFORM_BINARY_PATH=/path/to/terraform
+TFPOLICY_BINARY_PATH=/path/to/tfpolicy
+
+# External Repository Path (Primary use case)
+# Set this to convert Sentinel policies from an external repository
+EXTERNAL_REPO_DIR=/path/to/your/sentinel-repository
+
+# Data directories (used when EXTERNAL_REPO_DIR is not set)
+DATA_DIR=./data
+INPUT_DIR=input
+INPUT_FILE=policy_goal.txt
+OUTPUT_DIR=output
+
+# Execution
+MAX_WORKERS=5
+IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
+IMAGE_TAG=0.0.26
+
+# Stage 0: Extraction timeout
+STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
+
+# Stage 1: Requirement Generation timeout (per goal)
+STAGE1_TIMEOUT=300  # Optional, defaults to 300 (5 minutes)
+
+# Stage 2: Policy Generation timeout (per policy)
+STAGE2_TIMEOUT=900  # Optional, defaults to 900 (15 minutes)
+
+# Stage 3: Summary Generation timeout
+STAGE3_TIMEOUT_BASE=180  # Optional, defaults to 180 (3 minutes base)
+STAGE3_TIMEOUT_PER_POLICY=60  # Optional, defaults to 60 (1 minute per policy)
+```
+
+## Usage
+
+### Pre-flight Check (Recommended)
+
+Before running the pipeline, verify all prerequisites are met:
+
+```bash
+# Check all prerequisites
+./pre-check.sh
+
+# Or check specific components
+./pre-check.sh docker    # Docker daemon only
+./pre-check.sh mcp       # MCP server only
+./pre-check.sh binaries  # terraform/tfpolicy binaries only
+./pre-check.sh env       # Environment variables only
+
+# JSON output for automation
+./pre-check.sh --json
+./pre-check.sh mcp --json
+```
+
+Note: `pre-check.sh` automatically detects and uses the available Python interpreter (`python3` or `python`).
+
+The pre-flight check will verify:
+- 🟢 **docker**: Docker daemon is running
+- 🟢 **env**: Environment variables are properly configured
+- 🟢 **binaries**: terraform and tfpolicy binaries are available and executable
+- 🟢 **input**: Input files exist
+- 🟢 **image**: Docker image is available
+- 🟢 **mcp**: MCP server is accessible at localhost:8500
+
+If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
+
+### Primary Use Case: External Repository Integration
+
+To convert Sentinel libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
+
+Example repository: https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/tree/main/policies/cloudtrail
+
+**Step 1: Download or clone the external repository**
+
+```bash
+# Option A: Download and extract
+curl -L https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/archive/refs/heads/main.zip -o repo.zip
+unzip repo.zip -d /tmp
+
+# Option B: Clone the repository
+git clone https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform.git /tmp/sentinel-repo
+```
+
+**Step 2: Set the external repository path in `.env`**
+
+```bash
+EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail
+```
+
+**Step 3: Run the pipeline**
+
+```bash
+./run.sh  # Auto-detects external mode when EXTERNAL_REPO_DIR is set
+```
+
+Or explicitly specify external mode:
+```bash
+./run.sh external  # Force external mode
+```
+
+The script automatically:
+- Detects `EXTERNAL_REPO_DIR` is set and runs in external mode
+- Extracts Sentinel files from the repository
+- Creates timestamped directories (`data/input-YYYYMMDD_HHMMSS/`, `data/output-YYYYMMDD_HHMMSS/`)
+- Generates policies
+- Deploys results to `EXTERNAL_REPO_DIR/tfpolicy/`
+
+Example output structure:
+
+```
+/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail/tfpolicy
+├── cloudtrail-bucket-access-logging-enabled/
+│   ├── cloudtrail-bucket-access-logging-enabled.policy.hcl
+│   ├── cloudtrail-bucket-access-logging-enabled.policytest.hcl
+│   ├── cloudtrail-bucket-access-logging-enabled.report.md
+│   └── cloudtrail-bucket-access-logging-enabled.tf
+└── ...
+```
+
+### Alternative: Local Mode (Manual Preparation)
+
+If you don't have an external repository or want to manually prepare input files:
+
+**Step 1: Prepare Data Directory**
+
+Create your `data/` directory structure. You can either:
+
+**Option A: Copy from sample-data**
 ```bash
 cp -r sample-data data
 ```
 
-This creates:
+**Option B: Create your own structure**
+```bash
+mkdir -p data/input
+# Then create your input files
+```
+
+**Step 2: Create Input File**
+
+Create `data/input/policy_goal.txt` with your Sentinel policy:
+
+**Option A: Inline Sentinel Code**
+````
+Generate TF Policy for
+```sentinel
+import "tfplan/v2" as tfplan
+import "tfresources" as tf
+
+resources = tf.plan(tfplan.planned_values.resources).type("aws_s3_bucket").resources
+violations = collection.reject(resources, func(res) {
+    return maps.get(res, "values.versioning.0.enabled", false)
+})
+
+main = rule {
+    violations is empty
+}
+```
+````
+
+**Option B: Sentinel File Paths**
+```
+Generate TF Policy for
+./data/input/sentinels/policy1.sentinel
+./data/input/sentinels/policy2.sentinel
+```
+
+**Step 3: Ensure EXTERNAL_REPO_DIR is NOT set in `.env`**
+
+Comment out or remove the `EXTERNAL_REPO_DIR` line in your `.env` file:
+
+```bash
+# EXTERNAL_REPO_DIR=/path/to/your/sentinel-repository
+```
+
+**Step 4: Run the pipeline**
+
+```bash
+./run.sh  # Auto-detects local mode when EXTERNAL_REPO_DIR is not set
+```
+
+Or explicitly specify local mode:
+```bash
+./run.sh local  # Force local mode (ignores EXTERNAL_REPO_DIR even if set)
+```
+
+The script will automatically detect that `EXTERNAL_REPO_DIR` is not set and run in local mode.
+
+**Output:**
+
+Output files are generated in the directory specified by `OUTPUT_DIR` in your `.env` file (default: `data/output`):
+
+```sh
+$ ls ./data/output
+CloudFront_Associated_WAF   goals                   summary.json
+stage0_extraction.log       stage3_summary.log      summary.md
+```
+
+**Important:** The `OUTPUT_DIR` must be empty before running the full pipeline to prevent accidental overwrites. If you need to run multiple conversions, set a different `OUTPUT_DIR` in `.env` for each run (e.g., `OUTPUT_DIR=output-v2`, `OUTPUT_DIR=results-20260603`).
+
+## Pipeline Stages
+
+The pipeline runs 4 stages automatically:
+
+- **Stage 0**: Extract policy goals → `data/output/goals/`
+- **Stage 1**: Generate requirements → `data/output/PolicyName/requirement.txt`
+- **Stage 2**: Generate policies and tests → `data/output/PolicyName/*.hcl`, `*.tf`
+- **Stage 3**: Create summary → `data/output/summary.md`
+
+## Output Structure
+
 ```
 data/
 ├── input/
-│   ├── policy_goal.txt
-│   └── sentinels/
-│       └── cloudfront-6.sentinel
-└── output/  (will be created during execution)
+│   └── policy_goal.txt
+└── output/
+    ├── goals/
+    │   ├── goal-001.txt
+    │   └── goal-002.txt
+    ├── PolicyName/
+    │   ├── requirement.txt
+    │   ├── <policy_name>.policy.hcl
+    │   ├── <policy_name>.policytest.hcl
+    │   ├── main.tf
+    │   ├── gwt.json
+    │   └── report.md
+    ├── summary.md
+    └── summary.json
 ```
 
-### Step 7: Copy Skills to Designated Location
+## Using the Skill with a Coding Agent
 
-You need to copy the skills used by these two executions to their designated locations. Refer to the following instructions for OpenCode and GitHub Copilot CLI:
+You can also use the packaged skill with a coding agent instead of running commands manually.
+
+### 1. Place the skill in your agent's skill directory
+
+Place the skill in the appropriate directory for your coding agent:
 
 **For OpenCode:**
-
 ```bash
 mkdir -p .opencode/skills
 cp -R skills/tfpac-setup .opencode/skills/
-cp -R skills/tfpac-run .opencode/skills/
 ```
 
 **For GitHub Copilot CLI:**
-
 ```bash
 mkdir -p .github/skills
 cp -R skills/tfpac-setup .github/skills/
-cp -R skills/tfpac-run .github/skills/
 ```
 
+### 2. Start your coding agent with your preferred provider and model
 
+Configure your coding agent (OpenCode or GitHub Copilot CLI) to use your LLM provider and model as usual.
 
-## Agent Setup (Using tfpac-setup Skill)
+### 3. Open the skills menu and select the skill
 
-This section demonstrates the actual tfpac-setup Skill execution using OpenCode. Since this is an AI Agent, you may notice minor differences between the screenshots and your execution results, but the overall flow is expected to be the same.
+In your coding agent:
 
-### Step 8: Execute the /skills command
+- type `/skills`
+- select `tfpac-setup`
 
-![Skills Command](photo/setup/(1):skills.png)
+The skill will then guide the workflow in this order:
 
-Type `/skills` in your coding agent to view available skills.
+1. **Input setup assistance**
+   - Help create `.env` file from `.env.example`
+   - Guide creation of `data/input/policy_goal.txt`
+   - Assist with placing Sentinel files in `data/input/sentinels/` if needed
+2. **Prerequisite check**
+   - Verify Docker image availability
+   - Check required binaries (terraform, tfpolicy)
+   - Validate MCP server connection
+3. **Pipeline run**
+   - Show how to execute the conversion pipeline with `./run.sh`
 
-### Step 9: Select the tfpac-setup skill
-
-![Select tfpac-setup](photo/setup/(2):tfpac-setup_selection.png)
-
-Choose `tfpac-setup` from the list of available skills to start the interactive environment setup wizard.
-
-### Step 10: Confirm tfpac-setup execution
-
-![Confirm tfpac-setup](photo/setup/(3):tfpac-setup_execution.png)
-
-Press Enter in this state to execute the skill and begin the configuration wizard.
-
-### Step 11: Docker image selection
-
-![Docker Image Selection](photo/setup/(4)docker_image_selection.png)
-
-Here, select the recommended Docker image (1. Yes). If the Docker image is not available locally, the system will help you pull it. In that case, follow the instructions to pull the image.
-
-### Step 12: Select execution mode
-
-![Local or External](photo/setup/(5)local_or_external.png)
-
-Here, select "2. Local Mode" to use the `data/input` directory that you copied in [Step 6: Prepare Conversion Data](#step-6-prepare-conversion-data) of [Prerequisites](#prerequisites).
-
-### Step 13: Configure Terraform binary path
-
-![Terraform Binary](photo/setup/(6)terraform_binary.png)
-
-Here, select "2. Type your own answer" and enter the path to your Terraform binary that you saved in [Step 5: Prepare Required Binaries](#step-5-prepare-required-binaries) of [Prerequisites](#prerequisites).
-
-Example: `/Users/<your-username>/terraform-binaries/terraform`
-
-**Note:** Replace `<your-username>` with your actual username.
-
-### Step 14: Configure TFPolicy binary path
-
-![TFPolicy Binary](photo/setup/(7)tfpolicy_binary.png)
-
-Here, select "2. Type your own answer" and enter the path to your TFPolicy binary that you saved in [Step 5: Prepare Required Binaries](#step-5-prepare-required-binaries) of [Prerequisites](#prerequisites).
-
-Example: `/Users/<your-username>/terraform-binaries/tfpolicy`
-
-**Note:** Replace `<your-username>` with your actual username.
-
-### Step 15: Select authentication provider
-
-![Authentication Provider](photo/setup/(8)provider.png)
-
-Choose your authentication method: LiteLLM (for enterprise endpoints) or GitHub Copilot. If you choose GitHub Copilot, the wizard will guide you through obtaining the required GitHub Copilot CLI credentials, as this setup is slightly more complex.
-
-### Step 16: Pipeline configuration
-
-![Pipeline Config](photo/setup/(9)pipeline_config.png)
-
-Here, select the default (1. No). You can optionally customize pipeline settings such as data directories, input/output paths, and maximum workers for parallel processing.
-
-### Step 17: Additional Docker settings
-
-![Additional Docker](photo/setup/(10)additinal_docker.png)
-
-Here, select the default (1. No). You can optionally configure additional Docker settings like container prefix.
-
-### Step 18: Timeout configuration
-
-![Timeout Settings](photo/setup/(11)timeout.png)
-
-Here, select the default (1. No). You can optionally adjust timeout values for each pipeline stage based on your policy complexity and processing requirements. Try with default values first - they should work for most cases.
-
-### Step 19: Configuration validation
-
-![Configuration Check](photo/setup/(12)check.png)
-
-Confirm that all required components (Docker, MCP server, binaries, and so on) are properly configured and accessible, before creating the `.env` file. If everything looks good, select "1. Yes" to proceed.
-
-### Step 20: Preview generated .env file
-
-![Preview Environment](photo/setup/(13)preview_env.png)
-
-Review the generated `.env` file content before saving. If there are no issues with the configuration, select "1. Yes" to save.
-
-
-### Step 21: Setup completion and next steps
-
-![Final Report](photo/setup/(14)final_report.png)
-
-Review the setup completion report showing configuration summary and next steps.
-
-**Important:** After this setup, manually fill in secret values marked as `<PLEASE_FILL_IN_MANUALLY>` in the `.env` file:
-
-- **For LiteLLM:** API key and endpoint URL
-  
-  ![LiteLLM Configuration](photo/setup/litellm.png)
-
-- **For GitHub Copilot:** Access token
-  
-  ![GitHub Copilot Configuration](photo/setup/github_copilot.png)
-
-
-## Run (Using tfpac-run Skill)
-
-### Step 22: Execute the /skills command
-
-![Skills Command](photo/run/(1):skills.png)
-
-Type `/skills` in your coding agent to view available skills.
-
-### Step 23: Select the tfpac-run skill
-
-![Select tfpac-run](photo/run/(2):skills_execution.png)
-
-Choose `tfpac-run` from the list of available skills to start the policy conversion process.
-
-### Step 24: Confirm tfpac-run execution
-
-![Confirm tfpac-run](photo/run/(3):tfpac-run.png)
-
-Press Enter in this state to execute the skill.
-
-### Step 25: Choose data source location
-
-![Local or External](photo/run/(4)local_or_external.png)
-
-Here, select "1. Convert from Sentinel - Manual Setup".
-
-### Step 26: Output directory cleanup
-
-![Output Cleanup](photo/run/(5)output_cleanup.png)
-
-If an output directory exists, you will be asked what to do with it. Choose to create a backup and cleanup (2. Backup and clean) or cleanup (3. Clean up) to avoid conflicts.
-
-**Note:** On first execution, the output directory is empty, so this step will be skipped.
-
-### Step 27: Pipeline execution starts
-
-![Run Script](photo/run/(6)run.sh.png)
-
-Here, select "1. Yes, execute". Then, `run.sh` script begins executing the policy conversion pipeline.
-
-### Step 28: Select reporting time interval
-
-![Time Selection](photo/run/(7)time_selection.png)
-
-Here, select "2. 60 seconds". This is the time interval for reporting the process status.
-
-### Step 29: Interim progress report
-
-![Interim Report](photo/run/(8)interim_report.png)
-
-The system provides interim reports at the interval you selected in the previous step, informing you of the current execution status, showing completed stages and progress.
-
-### Step 30: Final conversion report
-
-![Final Report](photo/run/(9)final_report.png)
-
-Review the final report showing all converted policies, whether the conversion succeeded, test case evaluation results, and any issues encountered.
-
-
----
-
-## Understanding the Output
-
-After successful execution, your output directory will contain:
-
-```
-data/output/
-├── goals/
-│   ├── goal-001.txt
-│   └── goal-002.txt
-├── PolicyName/
-│   ├── requirement.txt
-│   ├── <policy_name>.policy.hcl
-│   ├── <policy_name>.policytest.hcl
-│   ├── main.tf
-│   ├── gwt.json
-│   └── report.md
-├── summary.md
-└── summary.json
-```
-
-### Key Output Files
-
-| File | Description |
-|------|-------------|
-| `goals/goal-*.txt` | Extracted policy goals from input |
-| `requirement.txt` | Detailed requirements for the policy |
-| `*.policy.hcl` | Generated TFPolicy code |
-| `*.policytest.hcl` | Generated test cases |
-| `main.tf` | Terraform configuration for testing |
-| `report.md` | Detailed conversion report |
-| `summary.md` | Overall summary of all conversions |
-
----
-
-### Reviewing Conversion Results
-
-#### 1. Check the Summary Report
-
-Open `data/output/summary.md` to get an overview of all conversions:
-
-- **Conversion Statistics:** Success rate, total policies processed
-- **Policy List:** Each policy's name, status, and key metrics
-- **Quick Status:** See which policies succeeded or failed at a glance
-
-#### 2. Review Individual Policy Reports
-
-For detailed information about each policy, check the `report.md` file in each policy directory:
-
-```bash
-# Example: Review a specific policy's report
-cat data/output/PolicyName/report.md
-```
-
-Each `report.md` contains:
-- **Policy Overview:** What the policy checks
-- **Conversion Details:** How Sentinel was translated to TFPolicy
-- **Test Results:** Validation status
-- **Implementation Notes:** Important considerations
-
----
 
 ## Advanced Usage
 
-This guide uses coding agents (OpenCode or GitHub Copilot CLI), but you can also run the pipeline manually for more advanced control. See [README.md](README.md) for details.
+### Run Specific Steps (Local Mode)
 
-## Troubleshooting
+```bash
+./run.sh local --step 0
+./run.sh local --step 1 --goal-file goal-001.txt
+./run.sh local --step 2 --policy-dir CloudFront_Associated_WAF
+./run.sh local --step 3
+```
 
-If you encounter issues not covered here:
+### Run Specific Phases (External Mode)
 
-1. **Check logs:** Review stage logs in `data/output/stage*.log`
-2. **Verify configuration:** Double-check all settings in `.env`
+```bash
+./run.sh external --phase preprocess    # Extract only
+./run.sh external --phase generate      # Generate only
+./run.sh external --phase postprocess   # Deploy only
+```
 
----
+### Help
 
-**Document Version:** 2.0  
-**Last Updated:** July 2026  
+```bash
+./run.sh --help
+./run.sh local --help
+./run.sh external --help
+```
+
+### Pipeline Fails
+- Check `data/input/policy_goal.txt` exists and is properly formatted
+- Verify binary paths in `.env` are correct
+- Check logs in `data/output/stage*.log`
