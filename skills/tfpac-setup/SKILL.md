@@ -1,6 +1,6 @@
 ---
 name: tfpac-setup
-description: Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports two workflows - run.sh (manual data directory setup) and run_with_external_repo.sh (external repository integration).
+description: Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports the unified `run.sh` workflow, which automatically switches between local mode and external repository mode based on whether `EXTERNAL_REPO_DIR` is configured.
 ---
 
 # Skill: Interactive Environment Setup Wizard
@@ -14,21 +14,21 @@ description: Guide users through an interactive wizard to create a `.env` file f
 
 ## Workflow Overview
 
-This wizard supports two different workflows:
+This wizard supports the unified `run.sh` workflow with two execution modes:
 
-1. **run_with_external_repo.sh** - External Repository Integration
+1. **External Repository Mode (`run.sh external`)**
    - Automatically extracts Sentinel policies from an external repository
    - Converts them to TF policies
    - Deploys results back to the external repository
-   - Requires: `EXTERNAL_REPO_DIR` in .env
-   - Simple setup: Just specify the external repo directory
+   - Requires: `EXTERNAL_REPO_DIR` in `.env`
+   - `run.sh` may also auto-select this mode when `EXTERNAL_REPO_DIR` is set
 
-2. **run.sh** - Manual Data Directory Setup
-   - User manually creates data directory structure
+2. **Local Mode (`run.sh local`)**
+   - User manually prepares the data directory structure
    - User provides Sentinel policy files
-   - User creates policy_goal.txt with file paths
+   - User creates `policy_goal.txt` with file paths
    - More control over input files and structure
-   - Requires: Manual setup of `data/input/sentinels/` and `policy_goal.txt`
+   - Used when `EXTERNAL_REPO_DIR` is not set
 
 ## Security Note: Handling Existing .env Files
 
@@ -48,31 +48,149 @@ When loading an existing .env file, use the dotenv_tool.py to safely retrieve no
 
 ## Workflow
 
-### 1. Introduction and Workflow Selection
+### 1. Introduction and System Check
 Start by:
 - Greeting the user and explaining the wizard's purpose
 - Detecting the operating system and architecture
 - Providing appropriate default values based on the system
 - If `.env` file exists, use `dotenv_tool.py` to load existing non-secret values (secrets will be masked)
 
-**Ask: "Which workflow do you want to use?"**
+### 2. Pre-flight System Check
+
+**Before configuring the environment, verify system readiness:**
+
+**Step 2a: Check Docker availability**
+Run a simple Docker command to verify Docker is available:
+```bash
+docker --version
+```
+
+**If Docker is not available:**
+- Show error: "Docker is not available. Please install Docker and ensure it's running."
+- Ask user to install/start Docker before proceeding
+
+**Step 2b: Docker Image Configuration and Setup**
+
+**Ask: "Do you want to use the latest recommended Docker image version?"**
+- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.26`
+- Default: Yes
+
+If **Yes** (use recommended version):
+- Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
+- Set `IMAGE_TAG`: "0.0.25-rc1"
+
+If **No** (custom version):
+- Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.25-rc1")
+
+**Check if image exists locally:**
+```bash
+docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TAG]" || echo "Image not found locally"
+```
+
+**Important:** If the output shows "Image not found locally", the image does not exist. Do not proceed until the image is pulled.
+
+**If image does not exist locally:**
+- Show message: "📦 Docker image not found locally. You need to pull it first."
+- **Important:** Image pull requires authentication. Show ONLY the following instructions (do not provide alternative methods):
+  ```
+  🔐 Authentication Required
+  
+  Before pulling the image, please login to IBM Cloud Container Registry in your terminal:
+  
+  docker login icr.io -u iamapikey
+  
+  When prompted, enter your IBM Cloud API key.
+  (If you don't have an API key, please contact your HashiCorp representative to obtain access.)
+  
+  After successful login, please confirm and I will pull the image for you.
+  ```
+- **IMPORTANT:** Do NOT suggest creating API keys or provide alternative authentication methods. Users must obtain API keys from their HashiCorp representative.
+- **Wait for user confirmation** that they have logged in successfully
+- After confirmation, pull the image:
+```bash
+docker pull [IMAGE_NAME]:[IMAGE_TAG]
+```
+
+**If image pull fails:**
+- Show error details
+- Likely cause: Authentication not completed or expired
+- Ask user to verify login and try again
+- **STOP HERE** - Do not proceed to Step 2c until the image is successfully pulled
+
+**If image pull succeeds:**
+- Show success: "✅ Docker image pulled successfully"
+- **Update .env file immediately** with the image configuration:
+  - If `.env` exists, use `dotenv_tool.py` to check current values
+  - If `IMAGE_NAME` or `IMAGE_TAG` are missing or different, update them:
+    ```bash
+    # Use apply_diff or write_to_file to update .env
+    IMAGE_NAME=[IMAGE_NAME]
+    IMAGE_TAG=[IMAGE_TAG]
+    ```
+  - Show confirmation: "✅ Updated .env with image configuration"
+- Proceed to Step 2c
+
+**If image already exists:**
+- Show message: "✅ Docker image already available locally"
+- **Check and update .env file if needed**:
+  - If `.env` exists, use `dotenv_tool.py` to check current values
+  - If `IMAGE_NAME` or `IMAGE_TAG` are missing or different from the selected version, update them
+  - Show confirmation if updated: "✅ Updated .env with image configuration"
+- Proceed to Step 2c
+
+**Note:** Image name and tag are stored immediately to ensure consistency. They will be included in the final `.env` file generation in Step 10.
+
+**Step 2c: Check MCP server (Only after image is confirmed available and .env is updated)**
+
+**Prerequisites for this step:**
+- Docker image must be pulled and available locally
+- `.env` file must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 2b)
+
+**Run MCP check:**
+```bash
+./pre-check.sh mcp
+```
+
+This check uses the Docker image specified in `.env` to verify MCP server connectivity.
+
+- 🟢 **mcp**: MCP server is accessible at localhost:8500 via container
+
+**If MCP check fails (🔴):**
+- Show error and provide guidance on starting MCP server
+- Note: "MCP server must be running on localhost:8500 before proceeding"
+- Common issues:
+  - MCP server not started
+  - Port 8500 not accessible
+  - Docker image cannot reach host.docker.internal
+
+**If all checks pass (🟢):**
+- Proceed to workflow selection
+
+**Note:** Binary paths and input file checks will be performed later after configuration is complete.
+
+### 3. Workflow Selection
+
+**Ask: "Which execution mode do you want to configure for `run.sh`?"**
 
 **Options:**
-1. **External Repository Integration (run_with_external_repo.sh)** - Recommended for existing Sentinel repositories
+1. **External Repository Mode (`run.sh external`)** - Recommended for existing Sentinel repositories
    - Automatically extracts Sentinel policies from your external repository
    - Converts them to TF policies
    - Deploys results back to the repository
-   - Simple setup: Just specify `EXTERNAL_REPO_DIR`
+   - Simple setup: specify `EXTERNAL_REPO_DIR`
    
-2. **Manual Data Directory Setup (run.sh)** - For custom policy conversion
+2. **Local Mode (`run.sh local`)** - For custom policy conversion
    - You manually create data directory structure
-   - You provide Sentinel policy files in `data/input/sentinels/`
+   - You provide Sentinel policy files in `DATA_DIR/INPUT_DIR/sentinels/`
    - You create `policy_goal.txt` with file paths to convert
    - More control over which files to convert
 
-**Note:** If user selects option 1 (External Repository), skip to step 1b. If option 2 (Manual Setup), continue to step 1a.
+**Important:** `run.sh` is the single entry point. In practice, if `EXTERNAL_REPO_DIR` is set, the script may automatically use external mode; if it is not set, it uses local mode.
 
-### 1a. Manual Setup - Data Directory Assistance (Only for run.sh workflow)
+**Note:** If user selects option 1 (External Repository Mode), skip to step 3b. If option 2 (Local Mode), continue to step 3a.
+
+### 3a. Local Mode - Data Directory Assistance (Only for `run.sh local`)
 
 **Ask: "Do you have Sentinel policy files ready to convert?"**
 
@@ -98,9 +216,9 @@ If **No** or user declines help:
      - ./data/input/sentinels/your-policy-2.sentinel
   ```
 
-### 1b. External Repository Setup (Only for run_with_external_repo.sh workflow)
+### 3b. External Repository Setup (Only for `run.sh external`)
 
-**This step is reached only if user selected "External Repository Integration" in step 1.**
+**This step is reached only if user selected "External Repository Mode" in step 3.**
 
 **Ask: "What is the path to your external Sentinel repository?"**
 - Parameter: `EXTERNAL_REPO_DIR`
@@ -123,7 +241,7 @@ If **No** or user declines help:
 - macOS (x86_64): `/usr/local/bin/terraform`, `/usr/local/bin/tfpolicy`
 - Linux: `/usr/local/bin/terraform`, `/usr/local/bin/tfpolicy`
 
-### 2. Binary Paths Configuration
+### 4. Binary Paths Configuration
 Ask the user for:
 
 **TERRAFORM_BINARY_PATH:**
@@ -138,7 +256,7 @@ Ask the user for:
 - Validation: Must be a valid path
 - Note: "tfpolicy is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
 
-### 3. Authentication Provider Configuration
+### 5. Authentication Provider Configuration
 Ask: "Which authentication provider do you want to use?"
 
 **Options:**
@@ -168,7 +286,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.24 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -221,7 +339,7 @@ Ask: "Which authentication provider do you want to use?"
 3. **Skip (configure manually later)**
    - Don't set authentication variables
 
-### 4. Pipeline Configuration (Optional)
+### 6. Pipeline Configuration (Optional)
 Ask: "Do you want to customize pipeline settings?" (default: No, note: "Default values work for most cases. You can change output directory or other settings if needed.")
 
 If yes, ask for:
@@ -231,15 +349,15 @@ If yes, ask for:
 - **INPUT_FILE** (default: "policy_goal.txt", note: "Relative to DATA_DIR/INPUT_DIR/")
 - **MAX_WORKERS** (default: "5", validation: Must be a positive integer)
 
-### 5. Docker Configuration (Optional)
-Ask: "Do you want to customize Docker settings?" (default: No)
+### 7. Docker Configuration (Optional)
+Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 2b")
 
 If yes, ask for:
-- **IMAGE_NAME** (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- **IMAGE_TAG** (default: "0.0.24")
+- **IMAGE_NAME** (default: value from step 2b, note: "Already configured")
+- **IMAGE_TAG** (default: value from step 2b, note: "Already configured")
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
 
-### 6. Timeout Configuration (Optional)
+### 8. Timeout Configuration (Optional)
 Ask: "Do you want to customize timeout settings?" (default: No, note: "Default values are usually sufficient")
 
 If yes, ask for (all in seconds, must be positive integers):
@@ -249,20 +367,20 @@ If yes, ask for (all in seconds, must be positive integers):
 - **STAGE3_TIMEOUT_BASE** (default: "180") - Summary base timeout
 - **STAGE3_TIMEOUT_PER_POLICY** (default: "60") - Summary additional timeout per policy
 
-### 7. Review Configuration Summary
+### 9. Review Configuration Summary
 
 Show a summary of all configured values based on the selected workflow:
 
-**For External Repository Integration (run_with_external_repo.sh):**
-- Workflow: External Repository Integration
+**For External Repository Mode (`run.sh external`):**
+- Workflow: External Repository Mode
 - External Repository: [EXTERNAL_REPO_DIR value]
 - Sentinel HCL: [SENTINEL_HCL_PATH value or "Not configured"]
 - Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
 - Authentication: [AUTH_PROVIDER details]
 - Pipeline Settings: [DATA_DIR, INPUT_DIR, OUTPUT_DIR, etc.]
 
-**For Manual Data Directory Setup (run.sh):**
-- Workflow: Manual Data Directory Setup
+**For Local Mode (`run.sh local`):**
+- Workflow: Local Mode
 - Data Directory: [DATA_DIR value]
 - Input Directory: [INPUT_DIR value]
 - Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
@@ -273,16 +391,16 @@ Ask: "Does this configuration look correct?" (default: Yes)
 - If No: Allow user to go back and modify settings
 - If Yes: Proceed to generate .env file
 
-### 8. Generate and Preview .env File
+### 10. Generate and Preview .env File
 
 **Generate .env file content based on selected workflow.**
 
-**For External Repository Integration (run_with_external_repo.sh):**
+**For External Repository Mode (`run.sh external`):**
 - MUST include: EXTERNAL_REPO_DIR
 - MUST include: SENTINEL_HCL_PATH (if configured)
 - Include all standard configuration
 
-**For Manual Data Directory Setup (run.sh):**
+**For Local Mode (`run.sh local`):**
 - Do NOT include: EXTERNAL_REPO_DIR or SENTINEL_HCL_PATH
 - Include all standard configuration
 
@@ -336,7 +454,7 @@ MAX_WORKERS=<value>
 
 Show the preview to the user and ask for confirmation.
 
-### 9. Save Configuration and Next Steps
+### 11. Save Configuration and Next Steps
 
 Ask: "Save this configuration to .env file?" (default: Yes)
 
@@ -347,29 +465,74 @@ If yes:
 - Show success message: "✅ Successfully created .env file at: <path>"
 - **Important reminder:** "⚠️ Don't forget to manually fill in secret values (API keys, tokens) marked with <PLEASE_FILL_IN_MANUALLY> in the .env file"
 
-**Suggest next steps based on selected workflow:**
+### 12. Final Configuration Check and Next Steps
 
-**For External Repository Integration (run_with_external_repo.sh):**
+After saving the `.env` file, verify the configuration based on the selected workflow:
+
+**For External Repository Mode:**
+Run a configuration check (input files not needed yet):
+```bash
+# Check env and system (skip input check for external mode)
+./pre-check.sh docker env binaries image mcp
+```
+
+This will verify:
+- 🟢 **docker**: Docker daemon is running (already checked in step 2)
+- 🟢 **env**: Environment variables are properly configured
+- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 2)
+- 🟢 **image**: Docker image is available (already checked in step 2)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+
+**For Local Mode:**
+Run a configuration check (input files may not be ready yet):
+```bash
+# Check env and system first
+./pre-check.sh docker env binaries image mcp
+```
+
+**Note:** Input file check is intentionally skipped here because users often prepare the data directory after creating `.env`. You can run `./pre-check.sh input` later after setting up your data directory.
+
+**If any checks fail (🔴):**
+- Show the error details from the pre-flight check output
+- Provide guidance on how to fix the issues
+- Common issues:
+  - Missing secret values in `.env` (API keys, tokens)
+  - Incorrect binary paths
+  - MCP server not running
+
+**If all checks pass (🟢):**
+- Configuration is complete
+- Proceed to next steps based on workflow
+
+**Show next steps based on selected workflow:**
+
+**For External Repository Mode (`run.sh external`):**
 ```
 📋 Next Steps:
 1. Fill in secret values (API keys, tokens) in .env file
-2. Run the pipeline with: ./run_with_external_repo.sh
+2. Ensure your external repository contains Sentinel policy files
+3. Run the pipeline with: ./run.sh external
 
 The script will automatically:
 - Extract Sentinel policies from: [EXTERNAL_REPO_DIR]
 - Convert them to TF policies
 - Deploy results back to the repository
+
+Note: Input directory setup is not needed for external mode.
 ```
 
-**For Manual Data Directory Setup (run.sh):**
+**For Local Mode (`run.sh local`):**
 ```
 📋 Next Steps:
 1. Fill in secret values (API keys, tokens) in .env file
 2. Set up your data directory:
-   - Create: data/input/sentinels/
-   - Copy your .sentinel files to: data/input/sentinels/
-   - Create: data/input/policy_goal.txt with file paths
-3. Run the pipeline with: ./run.sh
+   - Create: DATA_DIR/INPUT_DIR/sentinels/
+   - Copy your .sentinel files there
+   - Create: DATA_DIR/INPUT_DIR/policy_goal.txt with file paths
+3. Verify input files are ready: ./pre-check.sh input
+4. Run the pipeline with: ./run.sh local
+
+Note: You can prepare the data directory at any time before running the pipeline.
 ```
 
 If no:
