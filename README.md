@@ -1,4 +1,4 @@
-# terraform-pac-agent Quick Start Guide
+# terraform-policy-agent Quick Start Guide
 
 ## Getting Started
 
