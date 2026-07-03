@@ -72,7 +72,7 @@ docker --version
 **Step 2b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.25`
+- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.26`
 - Default: Yes
 
 If **Yes** (use recommended version):
@@ -286,7 +286,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.25 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
