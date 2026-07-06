@@ -4,13 +4,13 @@ Use this guide after the pipeline has run.
 
 ## Goal
 
-Verify whether the pipeline succeeded and answer questions using generated artifacts under `data/output`.
+Verify whether the pipeline succeeded and answer questions using generated artifacts under `DATA_DIR/OUTPUT_DIR`.
 
 ## Checklist
 
 ```text
 Terraform PAC verification progress:
-- [ ] Inspect data/output structure
+- [ ] Inspect DATA_DIR/OUTPUT_DIR structure
 - [ ] Review stage logs
 - [ ] Check summary files
 - [ ] Identify generated policies
@@ -21,12 +21,12 @@ Terraform PAC verification progress:
 
 Inspect the following when they exist:
 
-- `data/output/stage0_extraction.log`
-- `data/output/goals/goal-*_stage1.log`
-- `data/output/<PolicyName>/stage2_generation.log`
-- `data/output/stage3_summary.log`
-- `data/output/summary.md`
-- `data/output/summary.json`
+- `DATA_DIR/OUTPUT_DIR/stage0_extraction.log`
+- `DATA_DIR/OUTPUT_DIR/goals/goal-*_stage1.log`
+- `DATA_DIR/OUTPUT_DIR/<PolicyName>/stage2_generation.log`
+- `DATA_DIR/OUTPUT_DIR/stage3_summary.log`
+- `DATA_DIR/OUTPUT_DIR/summary.md`
+- `DATA_DIR/OUTPUT_DIR/summary.json`
 - relevant generated `report.md`, `requirement.txt`, `.hcl`, `.tf`, and `gwt.json` files
 
 Use the helper script for a first-pass summary:
@@ -47,7 +47,7 @@ Use `summary.md` as a human-readable cross-check, not the only output.
 
 ## Verification procedure
 
-1. Inspect the `data/output` directory structure first.
+1. Inspect the `DATA_DIR/OUTPUT_DIR` directory structure first.
 2. Check whether `summary.md` and `summary.json` exist.
 3. Review stage logs for failures or warnings.
 4. Look for error indicators such as:

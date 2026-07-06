@@ -72,16 +72,16 @@ docker --version
 **Step 2b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.26`
+- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.27`
 - Default: Yes
 
 If **Yes** (use recommended version):
 - Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.25-rc1"
+- Set `IMAGE_TAG`: "0.0.26"
 
 If **No** (custom version):
 - Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.25-rc1")
+- Ask for `IMAGE_TAG` (default: "0.0.26")
 
 **Check if image exists locally:**
 ```bash
@@ -182,7 +182,7 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
    
 2. **Local Mode (`run.sh local`)** - For custom policy conversion
    - You manually create data directory structure
-   - You provide Sentinel policy files in `DATA_DIR/INPUT_DIR/sentinels/`
+   - You provide Sentinel policy files in `data/input/sentinels/`
    - You create `policy_goal.txt` with file paths to convert
    - More control over which files to convert
 
@@ -286,7 +286,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.27 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    

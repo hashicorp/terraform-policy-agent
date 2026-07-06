@@ -133,7 +133,7 @@ def main() -> int:
         required.extend(["POLICY_DB"])
     elif args.workflow == "generation_with_crawler":
         # Generate with Crawler workflow - requires crawler configuration
-        required.extend(["CRAWLER_IMAGE_NAME", "CRAWLER_IMAGE_TAG", "CRAWLER_TIMEOUT"])
+        required.extend(["CRAWLER_IMAGE_NAME", "CRAWLER_IMAGE_TAG"])
     elif args.workflow == "conversion_external":
         # External Repository Integration workflow
         required.extend(["EXTERNAL_REPO_DIR"])
