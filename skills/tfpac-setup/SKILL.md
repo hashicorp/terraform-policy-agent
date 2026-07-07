@@ -77,11 +77,11 @@ docker --version
 
 If **Yes** (use recommended version):
 - Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.26"
+- Set `IMAGE_TAG`: "0.0.27"
 
 If **No** (custom version):
 - Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.26")
+- Ask for `IMAGE_TAG` (default: "0.0.27")
 
 **Check if image exists locally:**
 ```bash
