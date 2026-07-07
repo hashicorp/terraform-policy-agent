@@ -124,7 +124,7 @@ docker run -d \
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.27 \
   curl http://host.docker.internal:8500/health
 ```
 
@@ -297,7 +297,7 @@ Review the setup completion report showing configuration summary and next steps.
 
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.27 \
     sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
   ```
 

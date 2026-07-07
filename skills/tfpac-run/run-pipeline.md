@@ -32,16 +32,16 @@ When using background mode, inform the user:
 
 Run the full pipeline from the repository root.
 
-**⚠️ IMPORTANT: The following `data/output` directory check should be performed for ALL workflows EXCEPT `conversion_external`. Skip this check entirely if the user selected the `conversion_external` workflow.**
+**⚠️ IMPORTANT: The following `DATA_DIR/OUTPUT_DIR` directory check should be performed for ALL workflows EXCEPT `conversion_external`. Skip this check entirely if the user selected the `conversion_external` workflow.**
 
-Before execution (except for `conversion_external` workflow), inspect `data/output`:
+Before execution (except for `conversion_external` workflow), inspect `DATA_DIR/OUTPUT_DIR`:
 ```bash
-ls -la data/output
+ls -la DATA_DIR/OUTPUT_DIR
 ```
 
 If the directory already contains files from a previous run, ask the user how to proceed:
 - keep existing files as-is
-- move them aside to a backup location (`data/output_backup_{timestamp}`) and delete the original `data/output` contents
+- move them aside to a backup location (`DATA_DIR/OUTPUT_DIR_backup_{timestamp}`) and delete the original `DATA_DIR/OUTPUT_DIR` contents
 - clean them up before starting
 
 Do not delete or move existing user files without explicit confirmation.
@@ -83,7 +83,7 @@ Provide ONLY these clickable suggestions: 30, 60 (default), 90, custom input.
 
 Then repeat the following cycle:
 1. Sleep for the specified interval (use `sleep <seconds>` command - do not count manually)
-2. Read the last few lines of log files in `data/output` to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
+2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
 3. Summarize the current activity based on what you read from the logs. Report only facts from the log content, avoid speculation or assumptions.
 4. Always include the total line count: `Log line count total: <sum of all log file line counts>`
    - **Note:** This metric is essential to quantitatively show the user how much progress has been made and confirm that execution is actually progressing.
@@ -94,26 +94,26 @@ When you determine from the log status that execution has completed, inform the 
 
 ## Expected outputs
 
-Generated files appear under `data/output`.
+Generated files appear under `DATA_DIR/OUTPUT_DIR`.
 
 Typical outputs include:
 
-- `data/output/goals/`
-- `data/output/<PolicyName>/requirement.txt`
-- `data/output/<PolicyName>/*.hcl`
-- `data/output/<PolicyName>/*.tf`
-- `data/output/<PolicyName>/report.md`
-- `data/output/summary.md`
-- `data/output/summary.json`
+- `DATA_DIR/OUTPUT_DIR/goals/`
+- `DATA_DIR/OUTPUT_DIR/<PolicyName>/requirement.txt`
+- `DATA_DIR/OUTPUT_DIR/<PolicyName>/*.hcl`
+- `DATA_DIR/OUTPUT_DIR/<PolicyName>/*.tf`
+- `DATA_DIR/OUTPUT_DIR/<PolicyName>/report.md`
+- `DATA_DIR/OUTPUT_DIR/summary.md`
+- `DATA_DIR/OUTPUT_DIR/summary.json`
 
 ## Logs
 
-Prefer stage logs under `data/output`:
+Prefer stage logs under `DATA_DIR/OUTPUT_DIR`:
 
-- `data/output/stage0_extraction.log`
-- `data/output/goals/goal-*_stage1.log`
-- `data/output/<PolicyName>/stage2_generation.log`
-- `data/output/stage3_summary.log`
+- `DATA_DIR/OUTPUT_DIR/stage0_extraction.log`
+- `DATA_DIR/OUTPUT_DIR/goals/goal-*_stage1.log`
+- `DATA_DIR/OUTPUT_DIR/<PolicyName>/stage2_generation.log`
+- `DATA_DIR/OUTPUT_DIR/stage3_summary.log`
 
 `run.log` is optional and useful, but stage logs are the primary source of truth.
 
@@ -151,7 +151,7 @@ After stopping the pipeline (whether by user request or command interruption), a
 At first, check the value of `CONTAINER_PREFIX` value (target container prefix):
 
 ```bash
-python3 skills/tfpac-run/dotenv_tool.py .env
+python3 skills/tfpac-run/scripts/dotenv_tool.py .env
 ```
 
 Verify no containers with that prefix are still running:
@@ -175,6 +175,6 @@ If any containers are still running:
 **NOTE: Retry processes may start after stopping.** After executing the stop command, wait a few seconds and re-check with `docker ps | grep {CONTAINER_PREFIX}` to ensure no retry containers have started. If any containers are still running, repeat the stop command until all containers are confirmed stopped.
 
 4. **Ask next action**: After cleanup, ask the user whether to retry the command or end the process.
-   - If the user chooses to retry, first check `data/output` again with `ls -la data/output`, and if the directory contains files, ask how to handle them (keep, backup, or cleanup) before retrying the pipeline command.
+   - If the user chooses to retry, first check `DATA_DIR/OUTPUT_DIR` again with `ls -la DATA_DIR/OUTPUT_DIR`, and if the directory contains files, ask how to handle them (keep, backup, or cleanup) before retrying the pipeline command.
 
 This verification step ensures a clean state and prevents resource waste from orphaned containers.

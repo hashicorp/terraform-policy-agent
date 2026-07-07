@@ -1,6 +1,6 @@
 ---
 name: tfpac-run
-description: Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing data/output logs, or answering questions about generated Terraform policy artifacts.
+description: Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
 ---
 
 # ⚠️ IMPORTANT NOTE
@@ -20,7 +20,7 @@ description: Operates the Terraform Policy Automation agent end to end. Use when
 
 **Always use the dotenv_tool.py script to load existing .env files:**
 ```bash
-python3 skills/tfpac-run/dotenv_tool.py .env
+python3 skills/tfpac-run/scripts/dotenv_tool.py .env
 ```
 
 This script automatically masks sensitive values (API keys, tokens) before displaying them, preventing secrets from being exposed to the LLM. The tool identifies and masks the following secret variables:
@@ -30,6 +30,18 @@ This script automatically masks sensitive values (API keys, tokens) before displ
 
 When loading an existing .env file, use the dotenv_tool.py to safely retrieve non-secret configuration values.
 
+**⚠️ YOU MUST DO — Before executing any step under `## Workflow`:**
+You MUST read the `.env` file exactly once before starting the workflow using this command.
+```bash
+python3 skills/tfpac-run/scripts/dotenv_tool.py .env
+```
+
+After running this command, interpret every environment variable as its actual resolved value (do NOT rewrite the skill file itself). For example:
+- `DATA_DIR` → actual path (e.g. `data`)
+- `OUTPUT_DIR` → actual path (e.g. `output`)
+- All other variables → their actual resolved values
+
+You only need to interpret the instructions with substituted values — never modify the skill file itself.
 
 # Operating Terraform PAC Pipeline
 
@@ -63,96 +75,36 @@ Store the user's choice as one of: `conversion_local` or `conversion_external`.
 
 ### Step 2: Prerequisite Check
 
-Run the precheck tool with the selected workflow:
+Run the precheck script based on the selected workflow:
 
+**For `conversion_local` workflow:**
 ```bash
-python3 skills/tfpac-run/scripts/precheck_tool.py --workflow {workflow}
+./pre-check.sh docker env binaries image mcp input
 ```
 
-Where `{workflow}` is one of: `conversion_local` or `conversion_external`.
-
-**Analyze the JSON output:**
-
-1. Check if `"ok": true` or `"ok": false`
-2. If `"ok": false`, examine the `"errors"` array and `"checks"` object
-
-**If prerequisites are not satisfied (`"ok": false`), stop and tell the user exactly what must be fixed:**
-
-- **Missing environment variables** (`"missing_keys"`):
-  - List each missing variable
-  - Explain what each variable is for
-  - Guide user to update `.env` file
-
-- **Binary files not found or not executable** (`"binaries"`):
-  - `terraform_exists: false` → Terraform binary not found at specified path
-  - `terraform_executable: false` → Terraform binary exists but lacks execute permission (run `chmod +x <path>`)
-  - `tfpolicy_exists: false` → tfpolicy binary not found at specified path
-  - `tfpolicy_executable: false` → tfpolicy binary exists but lacks execute permission (run `chmod +x <path>`)
-
-- **Input file not found** (`"input_file_exists": false`):
-  - The policy_goal.txt file is missing
-  - Guide user to create the file at the specified path
-
-- **Docker image not found** (`"docker_image_exists": false`):
-  - The required Docker image is not available locally
-  - Guide user to pull the image: `docker pull <image_name>:<tag>`
-
-**Example error analysis:**
-
-```json
-{
-  "ok": false,
-  "checks": {
-    "missing_keys": ["MODEL_NAME", "TFPOLICY_BINARY_PATH"],
-    "binaries": {
-      "terraform_exists": true,
-      "terraform_executable": false,
-      "tfpolicy_exists": false,
-      "tfpolicy_executable": false
-    },
-    "input_file": "data/input/policy_goal.txt",
-    "input_file_exists": false,
-    "docker_image": "icr.io/polaris-20251120/terraform-pac-agent:0.0.24",
-    "docker_image_exists": false
-  },
-  "errors": [
-    "missing env keys: MODEL_NAME, TFPOLICY_BINARY_PATH",
-    "terraform binary not executable: /usr/local/bin/terraform",
-    "tfpolicy binary not found: /usr/local/bin/tfpolicy",
-    "input file not found: data/input/policy_goal.txt",
-    "docker image not found: icr.io/polaris-20251120/terraform-pac-agent:0.0.24"
-  ]
-}
+**For `conversion_external` workflow:**
+```bash
+./pre-check.sh docker env binaries image mcp
 ```
 
-**Tell the user:**
-```
-❌ Prerequisites check failed. Please fix the following issues:
+**Analyze the output:**
 
-1. Missing environment variables in .env:
-   - MODEL_NAME: The LLM model name to use (e.g., "claude-sonnet-4.6")
-   - TFPOLICY_BINARY_PATH: Path to the tfpolicy binary
+Look for the status line at the top of the report:
+- `✅ Status: READY` → All checks passed, proceed to Step 3
+- `❌ Status: NOT READY` → Issues found, must fix before proceeding
 
-2. Terraform binary is not executable:
-   - Path: /usr/local/bin/terraform
-   - Fix: Run `chmod +x /usr/local/bin/terraform`
+**If prerequisites are not satisfied (`❌ Status: NOT READY`):**
 
-3. tfpolicy binary not found:
-   - Expected path: /usr/local/bin/tfpolicy
-   - Fix: Install tfpolicy binary or update TFPOLICY_BINARY_PATH in .env
+Review the error messages and provide concise guidance. Common issues and fixes:
 
-4. Input file not found:
-   - Expected path: data/input/policy_goal.txt
-   - Fix: Create the file with your policy generation goals
+- **Docker image not found** → Login to IBM Cloud Container Registry (`docker login icr.io -u iamapikey`) and pull the image
+- **Environment variables missing** → Add required variables (MODEL_NAME, AUTH_PROVIDER, etc.) to `.env` file
+- **Binary not found** → Obtain binaries from HashiCorp representative or update TERRAFORM_BINARY_PATH/TFPOLICY_BINARY_PATH in `.env`
+- **Binary not executable** → Run `chmod +x <path>` to add execute permission
+- **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:0.3.3`
+- **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
 
-5. Docker image not available:
-   - Image: icr.io/polaris-20251120/terraform-pac-agent:0.0.24
-   - Fix options:
-     a) Pull the image: `docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.24`
-     b) Update IMAGE_NAME and IMAGE_TAG in .env to use a different available image
-```
-
-**Only proceed to Step 3 if `"ok": true`.**
+**Only proceed to Step 3 if status shows `✅ Status: READY`.**
 
 ### Step 3: Run Pipeline
 
@@ -164,12 +116,12 @@ Read [run-pipeline.md](run-pipeline.md) and execute the appropriate command base
 
 Read [verify.md](verify.md).
 
-Inspect generated files under `data/output`, review stage logs, and answer the user using the actual output files.
+Inspect generated files under `DATA_DIR/OUTPUT_DIR`, review stage logs, and present a report to the user.
 
 ## Notes
 
 - Prefer stable binary paths in `.env`. On macOS, avoid `/tmp` for mounted binaries when possible.
-- Prefer stage log files under `data/output` over console-only output.
+- Prefer stage log files under `DATA_DIR/OUTPUT_DIR` over console-only output.
 - If a file is large, inspect only the relevant sections.
 - Do not claim success if any critical stage failed.
 
