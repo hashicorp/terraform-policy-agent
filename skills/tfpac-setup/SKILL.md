@@ -51,8 +51,13 @@ When loading an existing .env file, use the dotenv_tool.py to safely retrieve no
 ### 1. Introduction and System Check
 Start by:
 - Greeting the user and explaining the wizard's purpose
-- Detecting the operating system and architecture
-- Providing appropriate default values based on the system
+- **Detecting the operating system and architecture by running the following commands:**
+  ```bash
+  uname -s
+  uname -m
+  ```
+  Store the results as `DETECTED_OS` (e.g. `Darwin`, `Linux`) and `DETECTED_ARCH` (e.g. `arm64`, `x86_64`).
+  These values will be used to pre-fill binary path defaults in Step 4.
 - If `.env` file exists, use `dotenv_tool.py` to load existing non-secret values (secrets will be masked)
 
 ### 2. Pre-flight System Check
@@ -236,23 +241,29 @@ If **No** or user declines help:
 - Generate policy_goal.txt automatically
 - Deploy results back to the repository
 
-**System-specific defaults:**
-- macOS (arm64): `/opt/homebrew/bin/terraform`, `/usr/local/bin/tfpolicy`
-- macOS (x86_64): `/usr/local/bin/terraform`, `/usr/local/bin/tfpolicy`
-- Linux: `/usr/local/bin/terraform`, `/usr/local/bin/tfpolicy`
-
 ### 4. Binary Paths Configuration
+
+**Before asking the user, resolve defaults from `DETECTED_OS` and `DETECTED_ARCH` (detected in Step 1):**
+
+| OS | Architecture | TERRAFORM_BINARY_PATH default | TFPOLICY_BINARY_PATH default |
+|----|--------------|-------------------------------|------------------------------|
+| Darwin | arm64 | `/opt/homebrew/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| Darwin | x86_64 | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| Linux | * | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+
+Present the resolved defaults to the user directly — do not ask them to identify their OS or architecture.
+
 Ask the user for:
 
 **TERRAFORM_BINARY_PATH:**
 - Question: "What is the path to your Terraform binary?"
-- Default: System-specific (see above)
+- Default: resolved from the table above based on `DETECTED_OS` / `DETECTED_ARCH`
 - Validation: Must be a valid path
 - Note: "Terraform CLI is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
 
 **TFPOLICY_BINARY_PATH:**
 - Question: "What is the path to your tfpolicy binary?"
-- Default: System-specific (see above)
+- Default: resolved from the table above based on `DETECTED_OS` / `DETECTED_ARCH`
 - Validation: Must be a valid path
 - Note: "tfpolicy is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
 
@@ -487,8 +498,17 @@ This will verify:
 Run a configuration check (input files may not be ready yet):
 ```bash
 # Check env and system first
-./pre-check.sh docker env binaries image mcp
+./pre-check.sh docker env binaries image mcp local output
 ```
+
+This will verify:
+- 🟢 **docker**: Docker daemon is running (already checked in step 2)
+- 🟢 **env**: Environment variables are properly configured
+- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 2)
+- 🟢 **image**: Docker image is available (already checked in step 2)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+- 🟢 **output**: OUTPUT_DIR is empty
+- 🟢 **local**: EXTERNAL_REPO_DIR is not set
 
 **Note:** Input file check is intentionally skipped here because users often prepare the data directory after creating `.env`. You can run `./pre-check.sh input` later after setting up your data directory.
 

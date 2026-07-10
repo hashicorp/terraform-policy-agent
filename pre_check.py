@@ -123,6 +123,48 @@ def find_terraform_pac_agent_image() -> dict:
         return {"found": False, "images": []}
 
 
+def get_binary_arch(binary_path: str) -> str | None:
+    """Get ELF architecture of a binary via `file -b`. Returns 'arm64', 'amd64', or None."""
+    import shutil
+    if not shutil.which("file"):
+        return None
+    try:
+        result = subprocess.run(
+            ["file", "-b", binary_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        output = result.stdout.lower()
+        if "aarch64" in output or "arm64" in output:
+            return "arm64"
+        if "x86-64" in output or "x86_64" in output:
+            return "amd64"
+        return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def get_image_arch(image: str) -> str | None:
+    """Get architecture of a Docker image via `docker image inspect`. Returns e.g. 'arm64', 'amd64', or None."""
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", image, "--format", "{{.Architecture}}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
 def print_interactive_report(result: dict) -> None:
     """Print user-friendly interactive report"""
     print("\n" + "=" * 70)
@@ -169,19 +211,29 @@ def print_interactive_report(result: dict) -> None:
         bins = checks["binaries"]
         tf_ok = bins.get("terraform_exists") and bins.get("terraform_executable")
         tfp_ok = bins.get("tfpolicy_exists") and bins.get("tfpolicy_executable")
-        
-        # Overall binaries status
-        binaries_ok = tf_ok and tfp_ok
+        tf_arch_ok = bins.get("terraform_arch_match")   # None = skipped, True/False = checked
+        tfp_arch_ok = bins.get("tfpolicy_arch_match")
+
+        # Overall binaries status (arch mismatch is also a hard error)
+        binaries_ok = tf_ok and tfp_ok and tf_arch_ok is not False and tfp_arch_ok is not False
         status = "🟢" if binaries_ok else "🔴"
-        
+
         if binaries_ok:
-            print(f"   {status} binaries  : Terraform & TFPolicy - OK")
+            image_arch = bins.get("image_arch")
+            arch_note = f" (arch: {image_arch})" if image_arch else ""
+            print(f"   {status} binaries  : Terraform & TFPolicy - OK{arch_note}")
         else:
             print(f"   {status} binaries  : Terraform & TFPolicy - Issues found")
             if not tf_ok:
                 print(f"                   - Terraform: Missing or not executable")
             if not tfp_ok:
                 print(f"                   - TFPolicy: Missing or not executable")
+            if tf_arch_ok is False:
+                print(f"                   - Terraform: arch mismatch"
+                      f" (binary={bins.get('terraform_arch')}, image={bins.get('image_arch')})")
+            if tfp_arch_ok is False:
+                print(f"                   - TFPolicy: arch mismatch"
+                      f" (binary={bins.get('tfpolicy_arch')}, image={bins.get('image_arch')})")
     
     # 4. Input file (subcommand: input)
     if "input_file_exists" in checks:
@@ -241,6 +293,44 @@ def print_interactive_report(result: dict) -> None:
             print(f"                           -e MCP_SESSION_MODE=stateless \\")
             print(f"                           hashicorp/terraform-mcp-server:0.3.3")
     
+    # 7. Policy Database (subcommand: database)
+    if "policy_db_configured" in checks:
+        configured = checks.get("policy_db_configured", False)
+        exists = checks.get("policy_db_exists", False)
+        
+        if configured and exists:
+            status = "🟢"
+            status_text = "Configured in .env file and exists"
+        elif configured and not exists:
+            status = "🔴"
+            status_text = "Configured in .env file but file not found"
+        else:
+            status = "🔴"
+            status_text = "Not configured in .env file"
+        
+        print(f"   {status} database  : Policy Database - {status_text}")
+        if "policy_db" in checks:
+            print(f"                   Path: {checks['policy_db']}")
+
+    # 8. Output directory (subcommand: output)
+    if "output_dir" in checks:
+        is_empty = checks.get("output_dir_empty", False)
+        if is_empty:
+            status = "🟢"
+            status_text = "Empty (OK)"
+        else:
+            status = "🔴"
+            status_text = "Not empty — must clean up before full pipeline"
+        print(f"   {status} output    : Output Directory - {status_text}")
+        print(f"                   Path: {checks['output_dir']}")
+
+    # 9. Local mode (subcommand: local)
+    if "is_local_mode" in checks:
+        is_local = checks["is_local_mode"]
+        status = "🟢" if is_local else "🔴"
+        status_text = "EXTERNAL_REPO_DIR is not set" if is_local else "EXTERNAL_REPO_DIR is set (not local mode)"
+        print(f"   {status} local     : Local Mode - {status_text}")
+
     print()
     
     # Errors summary
@@ -314,7 +404,7 @@ def main() -> int:
     output_format = "interactive"  # default
     check_targets = []  # list of checks to run
     
-    valid_subcommands = ["all", "docker", "env", "binaries", "input", "image", "mcp"]
+    valid_subcommands = ["all", "docker", "env", "binaries", "input", "image", "mcp", "database", "output", "local"]
     
     if len(sys.argv) > 1:
         if sys.argv[1] == "--summarize-output":
@@ -334,6 +424,9 @@ def main() -> int:
             print("  input               Check input file")
             print("  image               Check Docker image")
             print("  mcp                 Check MCP server")
+            print("  database            Check policy database")
+            print("  output              Check OUTPUT_DIR is empty")
+            print("  local               Check EXTERNAL_REPO_DIR is not set (local mode only)")
             print()
             print("Options:")
             print("  --json              Output in JSON format (for automation)")
@@ -449,11 +542,27 @@ def main() -> int:
 
     # Binaries check
     if "all" in check_targets or "binaries" in check_targets:
+        image = f"{env.get('IMAGE_NAME', '')}:{env.get('IMAGE_TAG', '')}"
+        image_arch = get_image_arch(image) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else None
+
+        tf_exists = terraform_path.exists()
+        tf_arch = get_binary_arch(str(terraform_path)) if tf_exists else None
+        tf_arch_match = (tf_arch == image_arch) if (tf_arch and image_arch) else None
+
+        tfp_exists = tfpolicy_path.exists()
+        tfp_arch = get_binary_arch(str(tfpolicy_path)) if tfp_exists else None
+        tfp_arch_match = (tfp_arch == image_arch) if (tfp_arch and image_arch) else None
+
         binary_checks = {
-            "terraform_exists": terraform_path.exists(),
-            "terraform_executable": os.access(terraform_path, os.X_OK) if terraform_path.exists() else False,
-            "tfpolicy_exists": tfpolicy_path.exists(),
-            "tfpolicy_executable": os.access(tfpolicy_path, os.X_OK) if tfpolicy_path.exists() else False,
+            "terraform_exists": tf_exists,
+            "terraform_executable": os.access(terraform_path, os.X_OK) if tf_exists else False,
+            "terraform_arch": tf_arch,
+            "terraform_arch_match": tf_arch_match,
+            "tfpolicy_exists": tfp_exists,
+            "tfpolicy_executable": os.access(tfpolicy_path, os.X_OK) if tfp_exists else False,
+            "tfpolicy_arch": tfp_arch,
+            "tfpolicy_arch_match": tfp_arch_match,
+            "image_arch": image_arch,
         }
         result["checks"]["binaries"] = binary_checks
 
@@ -463,6 +572,11 @@ def main() -> int:
         elif not binary_checks["terraform_executable"]:
             result["ok"] = False
             result["errors"].append(f"terraform binary not executable: {terraform_path}")
+        elif tf_arch_match is False:
+            result["ok"] = False
+            result["errors"].append(
+                f"terraform binary arch mismatch: binary={tf_arch}, image={image_arch} ({image})"
+            )
 
         if not binary_checks["tfpolicy_exists"]:
             result["ok"] = False
@@ -470,6 +584,11 @@ def main() -> int:
         elif not binary_checks["tfpolicy_executable"]:
             result["ok"] = False
             result["errors"].append(f"tfpolicy binary not executable: {tfpolicy_path}")
+        elif tfp_arch_match is False:
+            result["ok"] = False
+            result["errors"].append(
+                f"tfpolicy binary arch mismatch: binary={tfp_arch}, image={image_arch} ({image})"
+            )
 
     # Early exit for binaries-only check
     if check_targets == ["binaries"]:
@@ -559,9 +678,75 @@ def main() -> int:
             print_interactive_report(result)
         return 0 if result["ok"] else 1
 
-    # For "all" checks, include output_dir
-    if "all" in check_targets:
+    # Database check
+    if "all" in check_targets or "database" in check_targets:
+        policy_db = env.get("POLICY_DB")
+        
+        if not policy_db:
+            result["ok"] = False
+            result["errors"].append("POLICY_DB environment variable is not set")
+            result["checks"]["policy_db_configured"] = False
+            result["checks"]["policy_db_exists"] = False
+        else:
+            result["checks"]["policy_db_configured"] = True
+            result["checks"]["policy_db"] = policy_db
+            
+            # Check if the database file exists
+            policy_db_path = resolve_path(repo_root, policy_db)
+            db_exists = policy_db_path.exists()
+            result["checks"]["policy_db_exists"] = db_exists
+            
+            if not db_exists:
+                result["ok"] = False
+                result["errors"].append(f"Policy database file not found: {policy_db}")
+
+    # Early exit for database-only check
+    if check_targets == ["database"]:
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print_interactive_report(result)
+        return 0 if result["ok"] else 1
+
+    # Output directory check
+    if "all" in check_targets or "output" in check_targets:
         result["checks"]["output_dir"] = str(output_dir)
+        is_empty = not (output_dir.exists() and any(output_dir.iterdir()))
+        result["checks"]["output_dir_empty"] = is_empty
+        if not is_empty:
+            result["ok"] = False
+            result["errors"].append(
+                f"OUTPUT_DIR is not empty: {output_dir}\n"
+                "   Fix: delete its contents or set a new OUTPUT_DIR in .env"
+            )
+
+    # Early exit for output-only check
+    if check_targets == ["output"]:
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print_interactive_report(result)
+        return 0 if result["ok"] else 1
+
+    # Local mode check
+    if "all" in check_targets or "local" in check_targets:
+        external_repo_dir_val = env.get("EXTERNAL_REPO_DIR")
+        is_local = not bool(external_repo_dir_val)
+        result["checks"]["is_local_mode"] = is_local
+        if not is_local:
+            result["ok"] = False
+            result["errors"].append(
+                f"EXTERNAL_REPO_DIR is set ({external_repo_dir_val}); "
+                "remove it from .env to use local mode"
+            )
+
+    # Early exit for local-only check
+    if check_targets == ["local"]:
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print_interactive_report(result)
+        return 0 if result["ok"] else 1
 
     # Output based on format
     if output_format == "json":

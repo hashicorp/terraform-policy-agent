@@ -34,12 +34,12 @@ Use the helper script for a first-pass summary:
 **For `conversion_external` workflow:**
 First, identify the output directory name (format: `output-{timestamp}`), then specify it:
 ```bash
-python3 skills/tfpac-run/scripts/precheck_tool.py --summarize-output output-{timestamp}
+python3 skills/tfpac-run/scripts/result_check.py output-{timestamp}
 ```
 
 **For other workflows:**
 ```bash
-python3 skills/tfpac-run/scripts/precheck_tool.py --summarize-output
+python3 skills/tfpac-run/scripts/result_check.py
 ```
 
 Prefer `summary.json` as the structured source when generating a user-facing summary table.
