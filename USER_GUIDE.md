@@ -134,7 +134,9 @@ docker run --rm -it --entrypoint "" \
 ```
 
 ### Step 5: Prepare Required Binaries
-Download the Linux binaries for Terraform and TFPolicy from your HashiCorp representative.
+Download the Linux binaries for Terraform and TFPolicy:
+Terraform Binary - https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
+TFPolicy Binary - https://releases.hashicorp.com/tfpolicy/0.1.0/
 
 **Important:** The binaries must match your host architecture:
 - **M1/M2 Mac:** Use `linux-arm64` binaries
