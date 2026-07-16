@@ -79,7 +79,7 @@ Run the precheck script based on the selected workflow:
 
 **For `conversion_local` workflow:**
 ```bash
-./pre-check.sh docker env binaries image mcp input
+./pre-check.sh docker env binaries image mcp input local
 ```
 
 **For `conversion_external` workflow:**
@@ -101,8 +101,10 @@ Review the error messages and provide concise guidance. Common issues and fixes:
 - **Environment variables missing** → Add required variables (MODEL_NAME, AUTH_PROVIDER, etc.) to `.env` file
 - **Binary not found** → Obtain binaries from HashiCorp representative or update TERRAFORM_BINARY_PATH/TFPOLICY_BINARY_PATH in `.env`
 - **Binary not executable** → Run `chmod +x <path>` to add execute permission
+- **Binary arch mismatch** → Binary CPU architecture does not match the Docker image; obtain the correct architecture binary (e.g. `arm64` vs `amd64`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
 - **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:0.3.3`
 - **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
+- **OUTPUT_DIR not empty** → Delete its contents or set a new OUTPUT_DIR in `.env` before running the pipeline
 
 **Only proceed to Step 3 if status shows `✅ Status: READY`.**
 

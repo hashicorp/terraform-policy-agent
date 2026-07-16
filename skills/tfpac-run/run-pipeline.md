@@ -24,7 +24,7 @@ nohup <command> > <command_name>.log 2>&1 & echo $!
 This returns the PID of the background shell process and writes stdout and stderr to a log file named after the command.
 
 When using background mode, inform the user:
-- Logs are written to `<command_name>.log` (e.g., `run.sh.log`, `run_crawler.sh.log`)
+- Logs are written to `<command_name>.log` (e.g., `run.sh.log`)
 - They can inspect progress with `tail -f <command_name>.log`
 - `./stop.sh` can be used as a container cleanup fallback
 
@@ -48,15 +48,29 @@ Do not delete or move existing user files without explicit confirmation.
 
 After that (or immediately for `conversion_external`), execute the appropriate command based on the selected workflow:
 
-**NOTE: Before executing any command, always ask the user for confirmation. Present the command that will be executed and wait for explicit approval (e.g., "yes" or "no") before running it. Do not execute commands without user consent.**
+**NOTE: Before executing any command, always ask the user for confirmation. When asking for permission, first run the applicable `docker ps` check below and include any warning in the same confirmation message. Wait for explicit approval (e.g., "yes" or "no") before running it. Do not execute commands without user consent.**
 
 ### For `conversion_local` workflow:
+
+Before presenting the confirmation request, check:
+```bash
+docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+```
+If containers are found, include this warning in the confirmation message:
+> ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
 ```bash
 nohup ./run.sh local > run.sh.log 2>&1 & echo $!
 ```
 
 ### For `conversion_external` workflow:
+
+Before presenting the confirmation request, check:
+```bash
+docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+```
+If containers are found, include this warning in the confirmation message:
+> ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
 ```bash
 nohup ./run.sh external > run.sh.log 2>&1 & echo $!
