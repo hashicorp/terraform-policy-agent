@@ -123,12 +123,11 @@ def find_terraform_pac_agent_image() -> dict:
         return {"found": False, "images": []}
 
 
-def get_binary_arch(binary_path: str) -> tuple[str | None, str | None]:
-    """Get architecture and OS of a binary via `file -b`.
-    Returns (arch, os) where arch is 'arm64'/'amd64'/None and os is 'linux'/'macos'/None."""
+def get_binary_arch(binary_path: str) -> str | None:
+    """Get ELF architecture of a binary via `file -b`. Returns 'arm64', 'amd64', or None."""
     import shutil
     if not shutil.which("file"):
-        return None, None
+        return None
     try:
         result = subprocess.run(
             ["file", "-b", binary_path],
@@ -138,50 +137,32 @@ def get_binary_arch(binary_path: str) -> tuple[str | None, str | None]:
             timeout=10,
         )
         if result.returncode != 0:
-            return None, None
+            return None
         output = result.stdout.lower()
         if "aarch64" in output or "arm64" in output:
-            arch = "arm64"
-        elif "x86-64" in output or "x86_64" in output:
-            arch = "amd64"
-        else:
-            arch = None
-        if "mach-o" in output:
-            os_name = "macos"
-        elif "elf" in output:
-            os_name = "linux"
-        else:
-            os_name = None
-        return arch, os_name
+            return "arm64"
+        if "x86-64" in output or "x86_64" in output:
+            return "amd64"
+        return None
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None, None
+        return None
 
 
-def get_image_arch(image: str) -> tuple[str | None, str | None]:
-    """Get architecture and OS of a Docker image via `docker image inspect`.
-    Returns (arch, os) where arch is e.g. 'arm64'/'amd64'/None and os is 'linux'/'macos'/None."""
+def get_image_arch(image: str) -> str | None:
+    """Get architecture of a Docker image via `docker image inspect`. Returns e.g. 'arm64', 'amd64', or None."""
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", image, "--format", "{{.Architecture}}|{{.Os}}"],
+            ["docker", "image", "inspect", image, "--format", "{{.Architecture}}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=10,
         )
         if result.returncode != 0:
-            return None, None
-        parts = result.stdout.strip().split("|")
-        arch = parts[0] if parts[0] else None
-        raw_os = parts[1] if len(parts) > 1 and parts[1] else None
-        if raw_os == "linux":
-            os_name = "linux"
-        elif raw_os in ("darwin", "macos"):
-            os_name = "macos"
-        else:
-            os_name = raw_os or None
-        return arch, os_name
+            return None
+        return result.stdout.strip() or None
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None, None
+        return None
 
 
 def print_interactive_report(result: dict) -> None:
@@ -232,23 +213,15 @@ def print_interactive_report(result: dict) -> None:
         tfp_ok = bins.get("tfpolicy_exists") and bins.get("tfpolicy_executable")
         tf_arch_ok = bins.get("terraform_arch_match")   # None = skipped, True/False = checked
         tfp_arch_ok = bins.get("tfpolicy_arch_match")
-        tf_os_ok = bins.get("terraform_os_match")
-        tfp_os_ok = bins.get("tfpolicy_os_match")
 
-        # Overall binaries status (arch/OS mismatch is also a hard error)
-        binaries_ok = (
-            tf_ok and tfp_ok
-            and tf_arch_ok is not False and tfp_arch_ok is not False
-            and tf_os_ok is not False and tfp_os_ok is not False
-        )
+        # Overall binaries status (arch mismatch is also a hard error)
+        binaries_ok = tf_ok and tfp_ok and tf_arch_ok is not False and tfp_arch_ok is not False
         status = "🟢" if binaries_ok else "🔴"
 
         if binaries_ok:
             image_arch = bins.get("image_arch")
-            image_os = bins.get("image_os")
-            note_parts = [p for p in [image_arch, image_os] if p]
-            note = f" ({', '.join(note_parts)})" if note_parts else ""
-            print(f"   {status} binaries  : Terraform & TFPolicy - OK{note}")
+            arch_note = f" (arch: {image_arch})" if image_arch else ""
+            print(f"   {status} binaries  : Terraform & TFPolicy - OK{arch_note}")
         else:
             print(f"   {status} binaries  : Terraform & TFPolicy - Issues found")
             if not tf_ok:
@@ -258,15 +231,9 @@ def print_interactive_report(result: dict) -> None:
             if tf_arch_ok is False:
                 print(f"                   - Terraform: arch mismatch"
                       f" (binary={bins.get('terraform_arch')}, image={bins.get('image_arch')})")
-            if tf_os_ok is False:
-                print(f"                   - Terraform: OS mismatch"
-                      f" (binary={bins.get('terraform_os')}, image={bins.get('image_os')})")
             if tfp_arch_ok is False:
                 print(f"                   - TFPolicy: arch mismatch"
                       f" (binary={bins.get('tfpolicy_arch')}, image={bins.get('image_arch')})")
-            if tfp_os_ok is False:
-                print(f"                   - TFPolicy: OS mismatch"
-                      f" (binary={bins.get('tfpolicy_os')}, image={bins.get('image_os')})")
     
     # 4. Input file (subcommand: input)
     if "input_file_exists" in checks:
@@ -576,33 +543,26 @@ def main() -> int:
     # Binaries check
     if "all" in check_targets or "binaries" in check_targets:
         image = f"{env.get('IMAGE_NAME', '')}:{env.get('IMAGE_TAG', '')}"
-        image_arch, image_os = get_image_arch(image) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else (None, None)
+        image_arch = get_image_arch(image) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else None
 
         tf_exists = terraform_path.exists()
-        tf_arch, tf_os = get_binary_arch(str(terraform_path)) if tf_exists else (None, None)
+        tf_arch = get_binary_arch(str(terraform_path)) if tf_exists else None
         tf_arch_match = (tf_arch == image_arch) if (tf_arch and image_arch) else None
-        tf_os_match = (tf_os == image_os) if (tf_os and image_os) else None
 
         tfp_exists = tfpolicy_path.exists()
-        tfp_arch, tfp_os = get_binary_arch(str(tfpolicy_path)) if tfp_exists else (None, None)
+        tfp_arch = get_binary_arch(str(tfpolicy_path)) if tfp_exists else None
         tfp_arch_match = (tfp_arch == image_arch) if (tfp_arch and image_arch) else None
-        tfp_os_match = (tfp_os == image_os) if (tfp_os and image_os) else None
 
         binary_checks = {
             "terraform_exists": tf_exists,
             "terraform_executable": os.access(terraform_path, os.X_OK) if tf_exists else False,
             "terraform_arch": tf_arch,
             "terraform_arch_match": tf_arch_match,
-            "terraform_os": tf_os,
-            "terraform_os_match": tf_os_match,
             "tfpolicy_exists": tfp_exists,
             "tfpolicy_executable": os.access(tfpolicy_path, os.X_OK) if tfp_exists else False,
             "tfpolicy_arch": tfp_arch,
             "tfpolicy_arch_match": tfp_arch_match,
-            "tfpolicy_os": tfp_os,
-            "tfpolicy_os_match": tfp_os_match,
             "image_arch": image_arch,
-            "image_os": image_os,
         }
         result["checks"]["binaries"] = binary_checks
 
@@ -612,17 +572,11 @@ def main() -> int:
         elif not binary_checks["terraform_executable"]:
             result["ok"] = False
             result["errors"].append(f"terraform binary not executable: {terraform_path}")
-        else:
-            if tf_arch_match is False:
-                result["ok"] = False
-                result["errors"].append(
-                    f"terraform binary arch mismatch: binary={tf_arch}, image={image_arch} ({image})"
-                )
-            if tf_os_match is False:
-                result["ok"] = False
-                result["errors"].append(
-                    f"terraform binary OS mismatch: binary={tf_os}, image={image_os} ({image})"
-                )
+        elif tf_arch_match is False:
+            result["ok"] = False
+            result["errors"].append(
+                f"terraform binary arch mismatch: binary={tf_arch}, image={image_arch} ({image})"
+            )
 
         if not binary_checks["tfpolicy_exists"]:
             result["ok"] = False
@@ -630,17 +584,11 @@ def main() -> int:
         elif not binary_checks["tfpolicy_executable"]:
             result["ok"] = False
             result["errors"].append(f"tfpolicy binary not executable: {tfpolicy_path}")
-        else:
-            if tfp_arch_match is False:
-                result["ok"] = False
-                result["errors"].append(
-                    f"tfpolicy binary arch mismatch: binary={tfp_arch}, image={image_arch} ({image})"
-                )
-            if tfp_os_match is False:
-                result["ok"] = False
-                result["errors"].append(
-                    f"tfpolicy binary OS mismatch: binary={tfp_os}, image={image_os} ({image})"
-                )
+        elif tfp_arch_match is False:
+            result["ok"] = False
+            result["errors"].append(
+                f"tfpolicy binary arch mismatch: binary={tfp_arch}, image={image_arch} ({image})"
+            )
 
     # Early exit for binaries-only check
     if check_targets == ["binaries"]:
