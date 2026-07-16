@@ -1,4 +1,4 @@
-# terraform-pac-agent Quick Start Guide
+# terraform-policy-agent Quick Start Guide
 
 ## Getting Started
 
@@ -32,10 +32,10 @@ docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.28
 
 Download the following **Linux** binaries (used inside the container). The architecture must match your host machine:
 
-- **Terraform CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
+- **Terraform CLI**: Currently in beta, https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
   - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
-- **TFPolicy CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
+- **TFPolicy CLI**: Currently in beta, https://releases.hashicorp.com/tfpolicy/0.1.0/
   - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
 **Required MCP Server**:
