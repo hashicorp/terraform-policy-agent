@@ -48,23 +48,11 @@ When loading an existing .env file, use the dotenv_tool.py to safely retrieve no
 
 ## Workflow
 
-### 1. Introduction and System Check
-Start by:
-- Greeting the user and explaining the wizard's purpose
-- **Detecting the operating system and architecture by running the following commands:**
-  ```bash
-  uname -s
-  uname -m
-  ```
-  Store the results as `DETECTED_OS` (e.g. `Darwin`, `Linux`) and `DETECTED_ARCH` (e.g. `arm64`, `x86_64`).
-  These values will be used to pre-fill binary path defaults in Step 4.
-- If `.env` file exists, use `dotenv_tool.py` to load existing non-secret values (secrets will be masked)
-
-### 2. Pre-flight System Check
+### 1. Pre-flight System Check
 
 **Before configuring the environment, verify system readiness:**
 
-**Step 2a: Check Docker availability**
+**Step 1a: Check Docker availability**
 Run a simple Docker command to verify Docker is available:
 ```bash
 docker --version
@@ -74,7 +62,7 @@ docker --version
 - Show error: "Docker is not available. Please install Docker and ensure it's running."
 - Ask user to install/start Docker before proceeding
 
-**Step 2b: Docker Image Configuration and Setup**
+**Step 1b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
 - Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.28`
@@ -121,7 +109,7 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
 - Show error details
 - Likely cause: Authentication not completed or expired
 - Ask user to verify login and try again
-- **STOP HERE** - Do not proceed to Step 2c until the image is successfully pulled
+- **STOP HERE** - Do not proceed to Step 1c until the image is successfully pulled
 
 **If image pull succeeds:**
 - Show success: "✅ Docker image pulled successfully"
@@ -134,7 +122,7 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
     IMAGE_TAG=[IMAGE_TAG]
     ```
   - Show confirmation: "✅ Updated .env with image configuration"
-- Proceed to Step 2c
+- Proceed to Step 1c
 
 **If image already exists:**
 - Show message: "✅ Docker image already available locally"
@@ -142,15 +130,15 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
   - If `.env` exists, use `dotenv_tool.py` to check current values
   - If `IMAGE_NAME` or `IMAGE_TAG` are missing or different from the selected version, update them
   - Show confirmation if updated: "✅ Updated .env with image configuration"
-- Proceed to Step 2c
+- Proceed to Step 1c
 
-**Note:** Image name and tag are stored immediately to ensure consistency. They will be included in the final `.env` file generation in Step 10.
+**Note:** Image name and tag are stored immediately to ensure consistency. They will be included in the final `.env` file generation in Step 9.
 
-**Step 2c: Check MCP server (Only after image is confirmed available and .env is updated)**
+**Step 1c: Check MCP server (Only after image is confirmed available and .env is updated)**
 
 **Prerequisites for this step:**
 - Docker image must be pulled and available locally
-- `.env` file must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 2b)
+- `.env` file must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 1b)
 
 **Run MCP check:**
 ```bash
@@ -174,7 +162,7 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
 
 **Note:** Binary paths and input file checks will be performed later after configuration is complete.
 
-### 3. Workflow Selection
+### 2. Workflow Selection
 
 **Ask: "Which execution mode do you want to configure for `run.sh`?"**
 
@@ -193,9 +181,9 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
 
 **Important:** `run.sh` is the single entry point. In practice, if `EXTERNAL_REPO_DIR` is set, the script may automatically use external mode; if it is not set, it uses local mode.
 
-**Note:** If user selects option 1 (External Repository Mode), skip to step 3b. If option 2 (Local Mode), continue to step 3a.
+**Note:** If user selects option 1 (External Repository Mode), skip to step 2b. If option 2 (Local Mode), continue to step 2a.
 
-### 3a. Local Mode - Data Directory Assistance (Only for `run.sh local`)
+### 2a. Local Mode - Data Directory Assistance (Only for `run.sh local`)
 
 **Ask: "Do you have Sentinel policy files ready to convert?"**
 
@@ -221,9 +209,9 @@ If **No** or user declines help:
      - ./data/input/sentinels/your-policy-2.sentinel
   ```
 
-### 3b. External Repository Setup (Only for `run.sh external`)
+### 2b. External Repository Setup (Only for `run.sh external`)
 
-**This step is reached only if user selected "External Repository Mode" in step 3.**
+**This step is reached only if user selected "External Repository Mode" in step 2.**
 
 **Ask: "What is the path to your external Sentinel repository?"**
 - Parameter: `EXTERNAL_REPO_DIR`
@@ -241,33 +229,146 @@ If **No** or user declines help:
 - Generate policy_goal.txt automatically
 - Deploy results back to the repository
 
-### 4. Binary Paths Configuration
+### 3. Binary Paths Configuration
 
-**Before asking the user, resolve defaults from `DETECTED_OS` and `DETECTED_ARCH` (detected in Step 1):**
+**Step 3a: Detect image OS and architecture**
 
-| OS | Architecture | TERRAFORM_BINARY_PATH default | TFPOLICY_BINARY_PATH default |
-|----|--------------|-------------------------------|------------------------------|
-| Darwin | arm64 | `/opt/homebrew/bin/terraform` | `/usr/local/bin/tfpolicy` |
-| Darwin | x86_64 | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
-| Linux | * | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+Run the following command using `IMAGE_NAME` and `IMAGE_TAG` set in Step 1b:
+```bash
+docker image inspect [IMAGE_NAME]:[IMAGE_TAG] --format "{{.Architecture}}|{{.Os}}"
+```
+Store the results as `IMAGE_ARCH` (e.g. `arm64`, `amd64`) and `IMAGE_OS` (e.g. `linux`, `darwin`).
 
-Present the resolved defaults to the user directly — do not ask them to identify their OS or architecture.
+**Step 3b: Look up defaults and download URLs from the table below**
 
-Ask the user for:
+The binaries are mounted into and executed **inside** the Docker container, so they must match the **image's** OS and architecture — not the host machine.
 
-**TERRAFORM_BINARY_PATH:**
-- Question: "What is the path to your Terraform binary?"
-- Default: resolved from the table above based on `DETECTED_OS` / `DETECTED_ARCH`
-- Validation: Must be a valid path
-- Note: "Terraform CLI is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
+| Image OS | Image Arch | Terraform download URL | TFPolicy download URL | TERRAFORM_BINARY_PATH default | TFPOLICY_BINARY_PATH default |
+|----------|------------|------------------------|-----------------------|-------------------------------|------------------------------|
+| linux | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_arm64.zip` | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| linux | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_amd64.zip` | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| darwin | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_arm64.zip` | `/opt/homebrew/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| darwin | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_amd64.zip` | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
 
-**TFPOLICY_BINARY_PATH:**
-- Question: "What is the path to your tfpolicy binary?"
-- Default: resolved from the table above based on `DETECTED_OS` / `DETECTED_ARCH`
-- Validation: Must be a valid path
-- Note: "tfpolicy is currently in beta. Contact your HashiCorp representative to obtain the binary. This binary must be executable and match your container architecture."
+**If `IMAGE_OS`/`IMAGE_ARCH` matches one of the four rows above:**
 
-### 5. Authentication Provider Configuration
+Resolve the following **temporary variables**:
+- `_TF_URL` — Terraform download URL
+- `_TFP_URL` — TFPolicy download URL
+- `_TF_DEFAULT` — TERRAFORM_BINARY_PATH default
+- `_TFP_DEFAULT` — TFPOLICY_BINARY_PATH default
+
+Proceed to **Step 3c: Configure Terraform binary**.
+
+---
+
+**If `IMAGE_OS`/`IMAGE_ARCH` does NOT match any row (unknown combination) → Proceed this fallback**
+
+**Fallback 3-1: Configure Terraform binary**
+
+Ask: "Do you already have the Terraform binary? [Y/n]"
+
+**If YES:**
+- Ask: "What is the path to your Terraform binary?"
+  - Store as `TERRAFORM_BINARY_PATH`.
+
+**If NO:**
+- Inform the user:
+  ```
+  ⚠️ Your image OS/arch combination is not in the known list.
+  Please download the correct binaries manually from the following pages
+  and select the package that matches your container (IMAGE_OS/IMAGE_ARCH):
+
+  Terraform : https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
+  ```
+- Ask: "Where did you download the Terraform binary?"
+  - Store as `TERRAFORM_BINARY_PATH`.
+
+**Fallback 3-2: Configure tfpolicy binary**
+
+Ask: "Do you already have the tfpolicy binary? [Y/n]"
+
+**If YES:**
+- Ask: "What is the path to your tfpolicy binary?"
+  - Store as `TFPOLICY_BINARY_PATH`.
+- Proceed to **### 4. Authentication Provider Configuration**.
+
+**If NO:**
+- Inform the user:
+  ```
+  ⚠️ Your image OS/arch combination is not in the known list.
+  Please download the correct binaries manually from the following pages
+  and select the package that matches your container (IMAGE_OS/IMAGE_ARCH):
+
+  TFPolicy  : https://releases.hashicorp.com/tfpolicy/0.1.0/
+  ```
+- Ask: "Where did you download the tfpolicy binary?"
+  - Store as `TFPOLICY_BINARY_PATH`.
+- Proceed to **### 4. Authentication Provider Configuration**.
+
+---
+
+**Step 3c: Configure Terraform binary**
+
+Ask: "Do you already have the Terraform binary? [Y/n]"
+
+**If YES:**
+- Ask: "What is the path to your Terraform binary? [default: `_TF_DEFAULT`]"
+- Store the answer as `TERRAFORM_BINARY_PATH`.
+
+**If NO:**
+- Ask: "Where would you like to place the Terraform binary? [default: `_TF_DEFAULT`]"
+- Store the answer as `TERRAFORM_BINARY_PATH`.
+- Download, extract, and place:
+  ```bash
+  # Download
+  wget -O /tmp/terraform-pac.zip "_TF_URL"
+
+  # Extract
+  unzip -o /tmp/terraform-pac.zip -d /tmp/terraform-pac-tf/
+
+  # Place
+  cp /tmp/terraform-pac-tf/terraform [TERRAFORM_BINARY_PATH]
+  chmod +x [TERRAFORM_BINARY_PATH]
+
+  # Clean up
+  rm -rf /tmp/terraform-pac.zip /tmp/terraform-pac-tf/
+  ```
+  - Show success: "✅ Terraform binary placed at `TERRAFORM_BINARY_PATH`."
+  - If it fails, show the error and ask the user to obtain the binary manually from their HashiCorp representative.
+
+---
+
+**Step 3d: Configure tfpolicy binary**
+
+Ask: "Do you already have the tfpolicy binary? [Y/n]"
+
+**If YES:**
+- Ask: "What is the path to your tfpolicy binary? [default: `_TFP_DEFAULT`]"
+- Store the answer as `TFPOLICY_BINARY_PATH`.
+
+**If NO:**
+- Ask: "Where would you like to place the tfpolicy binary? [default: `_TFP_DEFAULT`]"
+- Store the answer as `TFPOLICY_BINARY_PATH`.
+- Download, extract, and place:
+  ```bash
+  # Download
+  wget -O /tmp/tfpolicy-pac.zip "_TFP_URL"
+
+  # Extract
+  unzip -o /tmp/tfpolicy-pac.zip -d /tmp/terraform-pac-tfp/
+
+  # Place
+  cp /tmp/terraform-pac-tfp/tfpolicy [TFPOLICY_BINARY_PATH]
+  chmod +x [TFPOLICY_BINARY_PATH]
+
+  # Clean up
+  rm -rf /tmp/tfpolicy-pac.zip /tmp/terraform-pac-tfp/
+  ```
+  - Show success: "✅ tfpolicy binary placed at `TFPOLICY_BINARY_PATH`."
+  - If it fails, show the error and ask the user to obtain the binary manually from their HashiCorp representative.
+
+### 4. Authentication Provider Configuration
 Ask: "Which authentication provider do you want to use?"
 
 **Options:**
@@ -350,7 +451,7 @@ Ask: "Which authentication provider do you want to use?"
 3. **Skip (configure manually later)**
    - Don't set authentication variables
 
-### 6. Pipeline Configuration (Optional)
+### 5. Pipeline Configuration (Optional)
 Ask: "Do you want to customize pipeline settings?" (default: No, note: "Default values work for most cases. You can change output directory or other settings if needed.")
 
 If yes, ask for:
@@ -360,15 +461,15 @@ If yes, ask for:
 - **INPUT_FILE** (default: "policy_goal.txt", note: "Relative to DATA_DIR/INPUT_DIR/")
 - **MAX_WORKERS** (default: "5", validation: Must be a positive integer)
 
-### 7. Docker Configuration (Optional)
-Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 2b")
+### 6. Docker Configuration (Optional)
+Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 1b")
 
 If yes, ask for:
-- **IMAGE_NAME** (default: value from step 2b, note: "Already configured")
-- **IMAGE_TAG** (default: value from step 2b, note: "Already configured")
+- **IMAGE_NAME** (default: value from step 1b, note: "Already configured")
+- **IMAGE_TAG** (default: value from step 1b, note: "Already configured")
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
 
-### 8. Timeout Configuration (Optional)
+### 7. Timeout Configuration (Optional)
 Ask: "Do you want to customize timeout settings?" (default: No, note: "Default values are usually sufficient")
 
 If yes, ask for (all in seconds, must be positive integers):
@@ -378,7 +479,7 @@ If yes, ask for (all in seconds, must be positive integers):
 - **STAGE3_TIMEOUT_BASE** (default: "180") - Summary base timeout
 - **STAGE3_TIMEOUT_PER_POLICY** (default: "60") - Summary additional timeout per policy
 
-### 9. Review Configuration Summary
+### 8. Review Configuration Summary
 
 Show a summary of all configured values based on the selected workflow:
 
@@ -402,7 +503,7 @@ Ask: "Does this configuration look correct?" (default: Yes)
 - If No: Allow user to go back and modify settings
 - If Yes: Proceed to generate .env file
 
-### 10. Generate and Preview .env File
+### 9. Generate and Preview .env File
 
 **Generate .env file content based on selected workflow.**
 
@@ -465,7 +566,7 @@ MAX_WORKERS=<value>
 
 Show the preview to the user and ask for confirmation.
 
-### 11. Save Configuration and Next Steps
+### 10. Save Configuration and Next Steps
 
 Ask: "Save this configuration to .env file?" (default: Yes)
 
@@ -476,7 +577,7 @@ If yes:
 - Show success message: "✅ Successfully created .env file at: <path>"
 - **Important reminder:** "⚠️ Don't forget to manually fill in secret values (API keys, tokens) marked with <PLEASE_FILL_IN_MANUALLY> in the .env file"
 
-### 12. Final Configuration Check and Next Steps
+### 11. Final Configuration Check and Next Steps
 
 After saving the `.env` file, verify the configuration based on the selected workflow:
 
@@ -488,11 +589,11 @@ Run a configuration check (input files not needed yet):
 ```
 
 This will verify:
-- 🟢 **docker**: Docker daemon is running (already checked in step 2)
+- 🟢 **docker**: Docker daemon is running (already checked in step 1)
 - 🟢 **env**: Environment variables are properly configured
-- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 2)
-- 🟢 **image**: Docker image is available (already checked in step 2)
-- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 3)
+- 🟢 **image**: Docker image is available (already checked in step 1)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 1)
 
 **For Local Mode:**
 Run a configuration check (input files may not be ready yet):
@@ -502,11 +603,11 @@ Run a configuration check (input files may not be ready yet):
 ```
 
 This will verify:
-- 🟢 **docker**: Docker daemon is running (already checked in step 2)
+- 🟢 **docker**: Docker daemon is running (already checked in step 1)
 - 🟢 **env**: Environment variables are properly configured
-- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 2)
-- 🟢 **image**: Docker image is available (already checked in step 2)
-- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 3)
+- 🟢 **image**: Docker image is available (already checked in step 1)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 1)
 - 🟢 **output**: OUTPUT_DIR is empty
 - 🟢 **local**: EXTERNAL_REPO_DIR is not set
 
