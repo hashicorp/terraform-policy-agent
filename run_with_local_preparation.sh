@@ -151,6 +151,18 @@ validate_env_vars() {
                 exit 1
             fi
             ;;
+        amazon-bedrock)
+            # Amazon Bedrock requires MODEL_NAME and MODEL_API_KEY (Bearer Token)
+            if [ -z "$MODEL_NAME" ] || [ -z "${MODEL_API_KEY:-}" ]; then
+                echo "ERROR: Required environment variables not set for Amazon Bedrock provider"
+                echo ""
+                echo "Please set the following environment variables:"
+                echo "  export AUTH_PROVIDER='amazon-bedrock'"
+                echo "  export MODEL_NAME='anthropic.claude-opus-4-5-20251101-v1:0'"
+                echo "  export MODEL_API_KEY='your-base64-encoded-bearer-token'"
+                exit 1
+            fi
+            ;;
         litellm|*)
             # LiteLLM requires MODEL_BASE_URL, MODEL_API_KEY, and MODEL_NAME
             if [ -z "$MODEL_BASE_URL" ] || [ -z "$MODEL_API_KEY" ] || [ -z "$MODEL_NAME" ]; then
@@ -521,8 +533,22 @@ echo ""
 
 # Build the docker command with binary mounts and separate input/output mounts
 # Binaries are mounted to /tmp and copied to /usr/local/bin by entrypoint.sh for concurrent safety
+# Build OPENCODE_MODEL: the model identifier used in opencode.json ({env:OPENCODE_MODEL})
+# Format: {provider}/{model} e.g. litellm/aws/claude-sonnet-4-5, amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0
+case "${AUTH_PROVIDER:-litellm}" in
+    github-copilot)
+        OPENCODE_MODEL="github-copilot1/${MODEL_NAME}"
+        ;;
+    amazon-bedrock)
+        OPENCODE_MODEL="amazon-bedrock/${MODEL_NAME}"
+        ;;
+    litellm|*)
+        OPENCODE_MODEL="litellm/${MODEL_NAME}"
+        ;;
+esac
+
 # Build environment variables based on AUTH_PROVIDER
-ENV_VARS="-e MODEL_NAME=\"${MODEL_NAME}\" -e OUTPUT_DIR=\"${CONTAINER_OUTPUT_DIR}\""
+ENV_VARS="-e MODEL_NAME=\"${MODEL_NAME}\" -e OUTPUT_DIR=\"${CONTAINER_OUTPUT_DIR}\" -e OPENCODE_MODEL=\"${OPENCODE_MODEL}\""
 
 # Add AUTH_PROVIDER if set
 if [ -n "${AUTH_PROVIDER:-}" ]; then
@@ -542,6 +568,10 @@ case "${AUTH_PROVIDER:-litellm}" in
         if [ -n "${GITHUB_COPILOT_EXPIRES:-}" ]; then
             ENV_VARS="$ENV_VARS -e GITHUB_COPILOT_EXPIRES=\"${GITHUB_COPILOT_EXPIRES}\""
         fi
+        ;;
+    amazon-bedrock)
+        # Amazon Bedrock requires API key (Bearer Token)
+        ENV_VARS="$ENV_VARS -e MODEL_API_KEY=\"${MODEL_API_KEY}\""
         ;;
     litellm|*)
         # LiteLLM requires base URL and API key
@@ -611,6 +641,7 @@ fi
 
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e MODEL_NAME=\"${MODEL_NAME}\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e OUTPUT_DIR=\"${CONTAINER_OUTPUT_DIR}\""
+DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e OPENCODE_MODEL=\"${OPENCODE_MODEL}\""
 
 # Add AUTH_PROVIDER if set
 if [ -n "${AUTH_PROVIDER:-}" ]; then
@@ -630,6 +661,10 @@ case "${AUTH_PROVIDER:-litellm}" in
         if [ -n "${GITHUB_COPILOT_EXPIRES:-}" ]; then
             DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e GITHUB_COPILOT_EXPIRES=\"${GITHUB_COPILOT_EXPIRES}\""
         fi
+        ;;
+    amazon-bedrock)
+        # Amazon Bedrock requires API key (Bearer Token)
+        DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e MODEL_API_KEY=\"${MODEL_API_KEY}\""
         ;;
     litellm|*)
         # LiteLLM requires base URL and API key

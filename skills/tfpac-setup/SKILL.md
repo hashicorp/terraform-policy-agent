@@ -65,16 +65,16 @@ docker --version
 **Step 1b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.28`
+- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29`
 - Default: Yes
 
 If **Yes** (use recommended version):
-- Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.28"
+- Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
+- Set `IMAGE_TAG`: "0.0.29"
 
 If **No** (custom version):
-- Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.28")
+- Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.29")
 
 **Check if image exists locally:**
 ```bash
@@ -379,7 +379,13 @@ Ask: "Which authentication provider do you want to use?"
      - `MODEL_NAME` (default: "aws/claude-sonnet-4-5")
      - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly.
 
-2. **GitHub Copilot CLI**
+2. **Amazon Bedrock (Bearer Token)**
+   - Set `AUTH_PROVIDER=amazon-bedrock`
+   - Ask for:
+     - `MODEL_NAME` (default: "anthropic.claude-opus-4-5-20251101-v1:0")
+     - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly.
+
+3. **GitHub Copilot CLI**
    - Set `AUTH_PROVIDER=github-copilot`
    - Ask for:
      - `MODEL_NAME` (default: "claude-sonnet-4.6")
@@ -398,7 +404,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.28 \
+     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    

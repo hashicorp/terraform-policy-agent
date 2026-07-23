@@ -25,7 +25,7 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.28
+docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29
 ```
 
 **Required Binaries**:
@@ -74,7 +74,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/polaris-20251120/terraform-pac-agent:0.0.28 \
+    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -129,6 +129,18 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
 
+**Option C: Amazon Bedrock (Bearer Token)**
+
+```bash
+AUTH_PROVIDER=amazon-bedrock
+MODEL_NAME=anthropic.claude-opus-4-5-20251101-v1:0
+MODEL_API_KEY=your-base64-encoded-bearer-token
+```
+
+- `AUTH_PROVIDER`: Set to `amazon-bedrock`
+- `MODEL_NAME`: Bedrock model ID (e.g., `anthropic.claude-opus-4-5-20251101-v1:0`)
+- `MODEL_API_KEY`: Your Bedrock Bearer Token (Base64 encoded API key)
+
 **How to get GitHub Copilot tokens:**
 
 **Recommended: Using Docker container (no local installation required)**
@@ -137,7 +149,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.28 \
+  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -188,8 +200,8 @@ OUTPUT_DIR=output
 
 # Execution
 MAX_WORKERS=5
-IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.28
+IMAGE_NAME=icr.io/terraform-policy-agent-2026/terraform-pac-agent
+IMAGE_TAG=0.0.29
 
 # Stage 0: Extraction timeout
 STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)

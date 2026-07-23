@@ -124,7 +124,7 @@ docker run -d \
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.28 \
+  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
   curl http://host.docker.internal:8500/health
 ```
 
@@ -248,7 +248,7 @@ Example: `/Users/<your-username>/terraform-binaries/tfpolicy`
 
 ![Authentication Provider](photo/setup/(8)provider.png)
 
-Choose your authentication method: LiteLLM (for enterprise endpoints) or GitHub Copilot. If you choose GitHub Copilot, the wizard will guide you through obtaining the required GitHub Copilot CLI credentials, as this setup is slightly more complex.
+Choose your authentication method: LiteLLM (for enterprise endpoints), Amazon Bedrock (Bearer Token), or GitHub Copilot. If you choose GitHub Copilot, the wizard will guide you through obtaining the required GitHub Copilot CLI credentials, as this setup is slightly more complex.
 
 ### Step 16: Pipeline configuration
 
@@ -293,13 +293,17 @@ Review the setup completion report showing configuration summary and next steps.
   
   ![LiteLLM Configuration](photo/setup/litellm.png)
 
+- **For Amazon Bedrock:** Bearer Token (Base64 encoded API key)
+
+  Set `MODEL_API_KEY` to your Bedrock Bearer Token in the `.env` file.
+
 - **For GitHub Copilot:** Access token
 
   Run this command to authenticate and retrieve your GitHub Copilot tokens:
 
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/polaris-20251120/terraform-pac-agent:0.0.28 \
+    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
     sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
   ```
 
