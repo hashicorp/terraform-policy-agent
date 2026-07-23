@@ -79,6 +79,9 @@ class PipelineExecutor:
         self.github_copilot_access_token = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN")
         self.github_copilot_refresh_token = os.getenv("GITHUB_COPILOT_REFRESH_TOKEN")
         self.github_copilot_expires = os.getenv("GITHUB_COPILOT_EXPIRES")
+
+        # Amazon Bedrock configuration (only needed if AUTH_PROVIDER=amazon-bedrock)
+        self.model_api_key = os.getenv("MODEL_API_KEY")
         
         # Timeout configuration (in seconds)
         self.stage0_timeout = int(os.getenv("STAGE0_TIMEOUT", "600"))  # 10 minutes
