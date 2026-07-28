@@ -128,6 +128,9 @@ DRYRUN=false
 TERRAFORM_BINARY_PATH="${TERRAFORM_BINARY_PATH:-}"
 TFPOLICY_BINARY_PATH="${TFPOLICY_BINARY_PATH:-}"
 
+# Policy database file path (relative to SCRIPT_DIR)
+POLICY_DB="${POLICY_DB:-database/policy_spec_db.jsonl}"
+
 # Validate required environment variables based on AUTH_PROVIDER
 validate_env_vars() {
     local auth_provider="${AUTH_PROVIDER:-litellm}"
@@ -589,10 +592,21 @@ if [ -n "${LOCAL_SKILLS_DIR:-}" ]; then
     fi
 fi
 
+# Resolve policy database file path for dry-run display
+POLICY_DB_RESOLVED=$(resolve_path "$POLICY_DB" "file")
+
 DOCKER_CMD="docker run --rm \\
   --name \"${CONTAINER_NAME}\" \\
   -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\" \\
-  -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\" \\
+  -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\" \\"
+
+# Add policy database mount if file exists
+if [ -f "$POLICY_DB_RESOLVED" ]; then
+    DOCKER_CMD="${DOCKER_CMD}
+  -v \"${POLICY_DB_RESOLVED}:/opt/mcp-server/database/policy_spec_db.jsonl:ro\" \\"
+fi
+
+DOCKER_CMD="${DOCKER_CMD}
   -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\" \\
   -v \"${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}\" \\
   ${LOCAL_SKILLS_MOUNT_DISPLAY}${ENV_VARS} \\
@@ -621,6 +635,12 @@ fi
 DOCKER_RUN_CMD="docker run --rm --name \"${CONTAINER_NAME}\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\""
+
+# Add policy database mount if file exists
+if [ -f "$POLICY_DB_RESOLVED" ]; then
+    DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${POLICY_DB_RESOLVED}:/opt/mcp-server/database/policy_spec_db.jsonl:ro\""
+fi
+
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}\""
 

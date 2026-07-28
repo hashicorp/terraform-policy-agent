@@ -1,2 +1,2 @@
-Convert following Sentinel Policies to TF Policies:
-- ./data/input/sentinels/cloudfront-6.sentinel
+Generate the following TF Policies:
+- AutoScaling.1

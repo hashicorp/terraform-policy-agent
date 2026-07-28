@@ -1,0 +1,264 @@
+# Policy Management Agent
+
+## 📖 Overview
+
+A system for adding, deleting, and updating data in the policy database (`database/policy_spec_db.jsonl`).
+
+### Basic Flow
+
+```
+1. Add/Delete/Update Mode → Generate update candidates (Create Delta file)
+                  ↓
+2. Apply Mode → Reflect changes to database
+```
+
+**Important**: Each mode does not directly modify the database, but records changes in `crawler/report/delta/{timestamp}.jsonl`. You can safely apply changes after reviewing the content.
+
+---
+
+## How to Use
+
+### Prerequisites
+
+Build the Docker image (terraform-pac-agent-skills:latest):
+
+```bash
+./docker/build.sh
+```
+
+### Running the Crawler
+
+1. Create `crawler/crawler_goal.txt` with your extraction source (see each mode's input format for details)
+
+2. Run the crawler:
+
+```bash
+./docker/run-crawler.sh {add/delete/update/apply/inspect}
+```
+
+3. Check the results:
+
+`crawler/guide/guide_{timestamp}.md` contains instructions on how to interpret the results and what to do next.
+
+### Logs
+
+Execution logs are saved to `crawler/log/crawler_{timestamp}.log` with:
+- Complete Docker output
+- Agent's actions and decisions
+- Error messages and return codes
+
+---
+
+## 📋 Available Modes
+
+- [➕ Add Mode](#-add-mode) - Adding new policies
+- [🗑️ Delete Mode](#️-delete-mode) - Deleting policies
+- [🔄 Update Mode](#-update-mode) - Updating existing policies
+- [✅ Apply Mode](#-apply-mode) - Applying changes to database
+- [🔍 Inspect Mode](#-inspect-mode) - Querying database information
+
+---
+
+## ➕ Add Mode
+
+### 📌 Use Case
+
+Generates Delta reports to add new policies to the database. Creates new policies from URLs, local files, JSONL, or natural language.
+
+### 📥 Input Types
+
+#### 1. URL
+```
+https://docs.aws.amazon.com/securityhub/latest/userguide/autoscaling-controls.html
+https://docs.aws.amazon.com/securityhub/latest/userguide/pci-standard.html
+```
+
+#### 2. Local File Path
+```
+crawler/data/new_policies.xlsx
+crawler/data/compliance_framework.pdf
+```
+
+#### 3. JSONL
+```json
+{"id": "custom_policy_001", "source": "custom", "control_id": "CUSTOM-001", "resource_type": "aws_s3_bucket", "compliance_framework": "custom_framework", "policy_spec": "S3 buckets must have encryption enabled"}
+{"id": "custom_policy_002", "source": "custom", "control_id": "CUSTOM-002", "resource_type": "aws_ec2_instance", "compliance_framework": "custom_framework", "policy_spec": "EC2 instances must use IMDSv2"}
+```
+
+#### 4. Natural Language
+```
+[AutoScaling.1] Auto Scaling groups associated with a load balancer should use ELB health checks
+
+Related requirements: PCI DSS v3.2.1/2.2, NIST.800-53.r5 CA-7
+
+Category: Identify > Inventory
+Severity: Low
+Resource type: AWS::AutoScaling::AutoScalingGroup
+
+This control checks whether an Amazon EC2 Auto Scaling group that is associated with a load balancer uses Elastic Load Balancing (ELB) health checks.
+```
+
+---
+
+## 🗑️ Delete Mode
+
+### 📌 Use Case
+
+Generates Delta reports to delete existing policies from the database. Supports exact match deletion in JSONL format or flexible deletion using natural language.
+
+### 📥 Input Types
+
+#### 1. JSONL (Exact Match Deletion)
+```json
+{"id": "aws_audit_manager_ALB_HTTP_TO_HTTPS_REDIRECTION_CHECK_3ee10364", "source": "aws_audit_manager", "control_id": "ALB_HTTP_TO_HTTPS_REDIRECTION_CHECK"}
+```
+
+Or partial match:
+```json
+{"source": "aws_audit_manager", "compliance_frameworks": ["iso_iec_27001_2013_annex_a"]}
+```
+
+#### 2. Natural Language
+
+With field value specification:
+```
+Delete policies where source is aws_securityhub
+```
+
+Without field value specification (semantic search):
+```
+Delete the policy that checks whether an Amazon EC2 Auto Scaling group is using multiple instance types.
+```
+
+---
+
+## 🔄 Update Mode
+
+### 📌 Use Case
+
+Generates Delta reports for updates. Updates existing policies to their latest state.
+
+### 📥 Input Types
+
+#### 1. URL
+Updates records with the specified URL to the latest state.
+```
+https://docs.aws.amazon.com/config/latest/developerguide/managed-rules.html
+https://cloud.google.com/security-command-center/docs/concepts-vulnerabilities
+```
+
+#### 2. Local File Path
+Updates policies in the specified file to the latest state.
+```
+crawler/data/ABC.xlsx
+crawler/data/EFG.pdf
+```
+
+#### 3. Before/After JSONL Path
+Directly specifies and replaces target records in the database. Each line in Before/After JSONL files corresponds to each other.
+```
+Before: crawler/data/before.jsonl
+After: crawler/data/after.jsonl
+```
+
+#### 4. Natural Language
+
+With field value specification:
+```
+Update the compliance_frameworks to pci_dss_4_0 for policies where source is aws_securityhub
+```
+
+Without field value specification (semantic search):
+```
+Set the control_id to AutoScaling.3 for the policy that checks whether an Amazon EC2 Auto Scaling group is using multiple instance types
+```
+
+---
+
+## ✅ Apply Mode
+
+### 📌 Use Case
+
+Applies operations (ADD/UPDATE/DELETE) from delta files generated by Add/Update/Delete modes to the policy database and updates tracking files.
+
+### 📥 Input
+
+Delta file path:
+```
+crawler/report/delta/20260430_100000.jsonl
+```
+
+### 🧾 Understanding Delta Files
+
+Delta files contain operations to be applied to the database:
+
+| Operation | Description |
+|------|------|
+| **ADD** | Add new policy |
+| **DELETE** | Delete existing policy |
+| **UPDATE** | Update existing policy |
+
+### 💡 Tips
+
+If the generated delta file doesn't match your intention:
+1. **Manual Edit**: Directly edit and correct the Delta file
+2. **Re-run**: Running the same process again may succeed
+
+Since Delta files can be reviewed and edited before application, adjustments can be made safely.
+
+### 📤 Output Files
+
+| File | Path | Description |
+|---------|------|------|
+| **Updated Database** | `database/policy_spec_db.jsonl` | Production database |
+| Backup | `database/backups/policy_spec_db_{timestamp}.jsonl` | Automatic backup |
+| Policy Summary | `database/POLICY_SUMMARY.md` | Overall Database summary |
+| Version History | `database/version_history.jsonl` | Operation history |
+| Skip Policies | `database/skip_policies.jsonl` | Failed operations |
+
+---
+
+## 🔍 Inspect Mode
+
+### 📌 Use Case
+
+Answers user questions about the policy database.
+
+### 📥 Input
+
+Natural language queries about the database:
+```
+How many policies are from aws_securityhub?
+```
+
+```
+List all policies related to S3 encryption
+```
+
+```
+Show policies with compliance_frameworks containing "pci_dss"
+```
+
+---
+
+## 📁 Directory Structure
+
+```
+crawler/
+├── crawler_goal.txt          # Input file for operations
+├── data/                      # Input data files
+├── report/                    # Operation reports
+│   ├── delta/                # Delta files
+│   └── summary/              # Summary reports
+├── guide/                     # Execution guides (check this after each mode execution for next steps)
+└── log/                       # Execution logs
+
+database/                      # Policy database
+├── policy_spec_db.jsonl      # Main database
+├── backups/                  # Database backups
+├── POLICY_SUMMARY.md         # Database summary
+├── version_history.jsonl     # Operation history
+└── skip_policies.jsonl       # Failed operations
+```
+
+---
