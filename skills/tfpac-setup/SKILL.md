@@ -1,6 +1,6 @@
 ---
 name: tfpac-setup
-description: Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports the unified `run.sh` workflow, which automatically switches between local mode and external repository mode based on whether `EXTERNAL_REPO_DIR` is configured.
+description: Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports multiple workflows including policy generation from existing database, policy generation with crawler, and Sentinel policy conversion (local or external repository).
 ---
 
 # Skill: Interactive Environment Setup Wizard
@@ -14,21 +14,23 @@ description: Guide users through an interactive wizard to create a `.env` file f
 
 ## Workflow Overview
 
-This wizard supports the unified `run.sh` workflow with two execution modes:
+This wizard supports multiple workflows for the Terraform Policy Agent:
 
-1. **External Repository Mode (`run.sh external`)**
-   - Automatically extracts Sentinel policies from an external repository
-   - Converts them to TF policies
-   - Deploys results back to the external repository
-   - Requires: `EXTERNAL_REPO_DIR` in `.env`
-   - `run.sh` may also auto-select this mode when `EXTERNAL_REPO_DIR` is set
+1. **Generate TF Policies from Existing Database (generation)**
+   - Use existing policy database (POLICY_DB)
+   - Generate TF policies based on specifications already in the database
+   - No crawler execution needed
 
-2. **Local Mode (`run.sh local`)**
-   - User manually prepares the data directory structure
-   - User provides Sentinel policy files
-   - User creates `policy_goal.txt` with file paths
-   - More control over input files and structure
-   - Used when `EXTERNAL_REPO_DIR` is not set
+2. **Generate TF Policies with Crawler (generation_with_crawler)**
+   - Extract policy specifications from URLs, PDFs, or other documents using crawler
+   - Create or update policy database
+   - Generate TF policies from newly extracted specifications
+   - Requires crawler configuration
+
+3. **Convert from Sentinel (conversion)**
+   - Convert existing Sentinel policies to TF policies
+   - Can use Manual Setup (local mode) or External Repository as the sentinel source
+   - Specific mode will be configured in Step 3
 
 ## Security Note: Handling Existing .env Files
 
@@ -48,11 +50,34 @@ When loading an existing .env file, use the dotenv_tool.py to safely retrieve no
 
 ## Workflow
 
-### 1. Pre-flight System Check
+### 1. Introduction and Workflow Selection
+
+Start by:
+- Greeting the user and explaining the wizard's purpose
+**Ask the user: "Which workflow do you want to use?"**
+**Options:**
+1. **Generate TF Policies from Existing Database (generation)**
+   - Use existing policy database (POLICY_DB)
+   - Generate TF policies based on specifications already in the database
+   - No crawler execution needed
+
+2. **Generate TF Policies with Crawler (generation_with_crawler)**
+   - Extract policy specifications from URLs, PDFs, or other documents using crawler
+   - Create policy database
+   - Generate TF policies from newly extracted specifications
+   - Requires crawler configuration
+
+3. **Convert from Sentinel (conversion)**
+   - Convert existing Sentinel policies to TF policies
+   - Can use Manual Setup (local mode) or External Repository as sentinel source
+
+Store the user's choice as `userSelectedMode` with one of: `generation`, `generation_with_crawler`, or `conversion`.
+
+### 2. Pre-flight System Check
 
 **Before configuring the environment, verify system readiness:**
 
-**Step 1a: Check Docker availability**
+**Step 2a: Check Docker availability**
 Run a simple Docker command to verify Docker is available:
 ```bash
 docker --version
@@ -62,19 +87,19 @@ docker --version
 - Show error: "Docker is not available. Please install Docker and ensure it's running."
 - Ask user to install/start Docker before proceeding
 
-**Step 1b: Docker Image Configuration and Setup**
+**Step 2b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29`
+- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1`
 - Default: Yes
 
 If **Yes** (use recommended version):
-- Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.29"
+- Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
+- Set `IMAGE_TAG`: "0.0.27.full.0.0.1"
 
 If **No** (custom version):
-- Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.29")
+- Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.27.full.0.0.1")
 
 **Check if image exists locally:**
 ```bash
@@ -98,6 +123,7 @@ docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TA
   
   After successful login, please confirm and I will pull the image for you.
   ```
+
 - **IMPORTANT:** Do NOT suggest creating API keys or provide alternative authentication methods. Users must obtain API keys from their HashiCorp representative.
 - **Wait for user confirmation** that they have logged in successfully
 - After confirmation, pull the image:
@@ -109,7 +135,7 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
 - Show error details
 - Likely cause: Authentication not completed or expired
 - Ask user to verify login and try again
-- **STOP HERE** - Do not proceed to Step 1c until the image is successfully pulled
+- **STOP HERE** - Do not proceed to Step 2c until the image is successfully pulled
 
 **If image pull succeeds:**
 - Show success: "✅ Docker image pulled successfully"
@@ -122,7 +148,7 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
     IMAGE_TAG=[IMAGE_TAG]
     ```
   - Show confirmation: "✅ Updated .env with image configuration"
-- Proceed to Step 1c
+- Proceed to Step 2c
 
 **If image already exists:**
 - Show message: "✅ Docker image already available locally"
@@ -130,15 +156,15 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
   - If `.env` exists, use `dotenv_tool.py` to check current values
   - If `IMAGE_NAME` or `IMAGE_TAG` are missing or different from the selected version, update them
   - Show confirmation if updated: "✅ Updated .env with image configuration"
-- Proceed to Step 1c
+- Proceed to Step 2c
 
-**Note:** Image name and tag are stored immediately to ensure consistency. They will be included in the final `.env` file generation in Step 9.
+**Note:** Image name and tag are stored immediately to ensure consistency. They will be included in the final `.env` file generation in Step 10.
 
-**Step 1c: Check MCP server (Only after image is confirmed available and .env is updated)**
+**Step 2c: Check MCP server (Only after image is confirmed available and .env is updated)**
 
 **Prerequisites for this step:**
 - Docker image must be pulled and available locally
-- `.env` file must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 1b)
+- `.env` file must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 2b)
 
 **Run MCP check:**
 ```bash
@@ -162,7 +188,15 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
 
 **Note:** Binary paths and input file checks will be performed later after configuration is complete.
 
-### 2. Workflow Selection
+### 3. Input Setup
+
+**Branch based on `userSelectedMode`:**
+
+- If `userSelectedMode` is `generation`: Skip to Step 3a
+- If `userSelectedMode` is `generation_with_crawler`: Skip to Step 3b
+- If `userSelectedMode` is `conversion`: Continue below
+
+**For `conversion` workflow only:**
 
 **Ask: "Which execution mode do you want to configure for `run.sh`?"**
 
@@ -181,9 +215,131 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
 
 **Important:** `run.sh` is the single entry point. In practice, if `EXTERNAL_REPO_DIR` is set, the script may automatically use external mode; if it is not set, it uses local mode.
 
-**Note:** If user selects option 1 (External Repository Mode), skip to step 2b. If option 2 (Local Mode), continue to step 2a.
+**Note:** If user selects option 1 (External Repository Mode), continue to step 3d. If option 2 (Local Mode), continue to step 3c.
 
-### 2a. Local Mode - Data Directory Assistance (Only for `run.sh local`)
+### 3a. Input Setup for `generation` workflow
+
+**Ask: "What is the path to your policy specifications database?"**
+- Parameter: `POLICY_DB`
+- Default: "database/policy_spec_db.jsonl"
+- Validation: File must exist
+- Note: "This file contains policy specifications"
+
+**Ask: "Have you already created a `data/input/policy_goal.txt` file with the policies you want to generate?"**
+- Default: No
+- Note: "The policy_goal.txt file should list the specific policies you want to generate from the database"
+Provide examples:
+```
+1. Using Control IDs:
+   Generate TF Policy for
+   DocumentDB.4, DMS.12, DMS.11, DMS.6, CloudFront.12, CloudFront.13,
+   CloudFront.6, Autoscaling.5, Backup.1, PCA.1
+
+2. Using natural language descriptions:
+   Generate TF Policy for
+   - verify whether groups associated with a load balancer are using health checks
+   - ensure S3 buckets have versioning enabled
+   - check if RDS instances have encryption at rest enabled
+```
+
+If **Yes**:
+- Skip to Step 4 (Binary Paths Configuration)
+
+If **No**:
+- **Ask: "Would you like me to help create the policy_goal.txt file?"**
+  - Default: Yes
+  
+  If **Yes**:
+    - Ask user to describe the policies they want to generate
+    - Create `data/input/policy_goal.txt` with the user's input
+    - Show confirmation: "✅ Created policy_goal.txt at: [path]"
+  
+  If **No**:
+    - Show instructions:
+      ```
+      📋 Manual Setup Instructions:
+      1. Create file: `data/input/policy_goal.txt`
+      2. List the policies you want to generate, for examples:
+      Generate TF Policy for
+      [Control IDs] or [natural language descriptions]
+      ```
+
+
+### 3b. Input Setup for `generation_with_crawler` workflow
+
+**Ask: "What policy specifications do you want to generate?"**
+
+Provide guidance:
+```
+📋 Specify your policy generation sources in crawler/crawler_goal.txt
+
+Examples:
+1. URL to compliance documentation:
+   https://docs.aws.amazon.com/securityhub/latest/userguide/autoscaling-controls.html#autoscaling-1
+
+2. Local file path:
+   crawler/data/policy.pdf
+
+3. Natural language description:
+   Generate specifications for AWS Security Hub controls...
+```
+
+**Ask: "Would you like me to help create the crawler_goal.txt file?"**
+
+If **Yes**:
+- Ask: "Please provide the policy generation source (URL, file path, or description):"
+- Create `crawler/crawler_goal.txt` with the provided content
+- Show confirmation: "✅ Created crawler/crawler_goal.txt"
+
+If **No**:
+- Show instructions:
+  ```
+  📋 Manual Setup:
+  Create crawler/crawler_goal.txt with your policy generation sources
+  ```
+
+**Ask: "Have you already created a `data/input/policy_goal.txt` file with the policies you want to generate?"**
+- Default: No
+- Note: "The policy_goal.txt file should list the specific policies you want to generate from the database"
+Provide examples:
+```
+1. Using Control IDs:
+   Generate TF Policy for
+   DocumentDB.4, DMS.12, DMS.11, DMS.6, CloudFront.12, CloudFront.13,
+   CloudFront.6, Autoscaling.5, Backup.1, PCA.1
+
+2. Using natural language descriptions:
+   Generate TF Policy for
+   - verify whether groups associated with a load balancer are using health checks
+   - ensure S3 buckets have versioning enabled
+   - check if RDS instances have encryption at rest enabled
+```
+
+If **Yes**:
+- Skip to Step 4 (Binary Paths Configuration)
+
+If **No**:
+- **Ask: "Would you like me to help create the policy_goal.txt file?"**
+  - Default: Yes
+  
+  If **Yes**:
+    - Ask user to describe the policies they want to generate
+    - Create `data/input/policy_goal.txt` with the user's input
+    - Show confirmation: "✅ Created policy_goal.txt at: [path]"
+  
+  If **No**:
+    - Show instructions:
+      ```
+      📋 Manual Setup Instructions:
+      1. Create file: `data/input/policy_goal.txt`
+      2. List the policies you want to generate, for examples:
+      Generate TF Policy for
+      [Control IDs] or [natural language descriptions]
+      ```
+
+### 3c. Local Mode - Data Directory Assistance (Only for `conversion` with local mode)
+
+**Update `userSelectedMode` to `conversion_local`.**
 
 **Ask: "Do you have Sentinel policy files ready to convert?"**
 
@@ -209,9 +365,9 @@ If **No** or user declines help:
      - ./data/input/sentinels/your-policy-2.sentinel
   ```
 
-### 2b. External Repository Setup (Only for `run.sh external`)
+### 3d. External Repository Setup (Only for `conversion` with external mode)
 
-**This step is reached only if user selected "External Repository Mode" in step 2.**
+**Update `userSelectedMode` to `conversion_external`.**
 
 **Ask: "What is the path to your external Sentinel repository?"**
 - Parameter: `EXTERNAL_REPO_DIR`
@@ -229,17 +385,17 @@ If **No** or user declines help:
 - Generate policy_goal.txt automatically
 - Deploy results back to the repository
 
-### 3. Binary Paths Configuration
+### 4. Binary Paths Configuration
 
-**Step 3a: Detect image OS and architecture**
+**Step 4a: Detect image OS and architecture**
 
-Run the following command using `IMAGE_NAME` and `IMAGE_TAG` set in Step 1b:
+Run the following command using `IMAGE_NAME` and `IMAGE_TAG` set in Step 2b:
 ```bash
 docker image inspect [IMAGE_NAME]:[IMAGE_TAG] --format "{{.Architecture}}|{{.Os}}"
 ```
 Store the results as `IMAGE_ARCH` (e.g. `arm64`, `amd64`) and `IMAGE_OS` (e.g. `linux`, `darwin`).
 
-**Step 3b: Look up defaults and download URLs from the table below**
+**Step 4b: Look up defaults and download URLs from the table below**
 
 The binaries are mounted into and executed **inside** the Docker container, so they must match the **image's** OS and architecture — not the host machine.
 
@@ -258,13 +414,13 @@ Resolve the following **temporary variables**:
 - `_TF_DEFAULT` — TERRAFORM_BINARY_PATH default
 - `_TFP_DEFAULT` — TFPOLICY_BINARY_PATH default
 
-Proceed to **Step 3c: Configure Terraform binary**.
+Proceed to **Step 4c: Configure Terraform binary**.
 
 ---
 
 **If `IMAGE_OS`/`IMAGE_ARCH` does NOT match any row (unknown combination) → Proceed this fallback**
 
-**Fallback 3-1: Configure Terraform binary**
+**Fallback 4-1: Configure Terraform binary**
 
 Ask: "Do you already have the Terraform binary? [Y/n]"
 
@@ -284,7 +440,7 @@ Ask: "Do you already have the Terraform binary? [Y/n]"
 - Ask: "Where did you download the Terraform binary?"
   - Store as `TERRAFORM_BINARY_PATH`.
 
-**Fallback 3-2: Configure tfpolicy binary**
+**Fallback 4-2: Configure tfpolicy binary**
 
 Ask: "Do you already have the tfpolicy binary? [Y/n]"
 
@@ -308,7 +464,7 @@ Ask: "Do you already have the tfpolicy binary? [Y/n]"
 
 ---
 
-**Step 3c: Configure Terraform binary**
+**Step 4c: Configure Terraform binary**
 
 Ask: "Do you already have the Terraform binary? [Y/n]"
 
@@ -339,7 +495,7 @@ Ask: "Do you already have the Terraform binary? [Y/n]"
 
 ---
 
-**Step 3d: Configure tfpolicy binary**
+**Step 4d: Configure tfpolicy binary**
 
 Ask: "Do you already have the tfpolicy binary? [Y/n]"
 
@@ -368,7 +524,7 @@ Ask: "Do you already have the tfpolicy binary? [Y/n]"
   - Show success: "✅ tfpolicy binary placed at `TFPOLICY_BINARY_PATH`."
   - If it fails, show the error and ask the user to obtain the binary manually from their HashiCorp representative.
 
-### 4. Authentication Provider Configuration
+### 5. Authentication Provider Configuration
 Ask: "Which authentication provider do you want to use?"
 
 **Options:**
@@ -404,7 +560,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -454,10 +610,10 @@ Ask: "Which authentication provider do you want to use?"
    - Optional: `GITHUB_COPILOT_REFRESH_TOKEN` - Tell user to manually fill this in the .env file
    - Optional: `GITHUB_COPILOT_EXPIRES` - Tell user to manually fill this in the .env file (default: "0")
 
-3. **Skip (configure manually later)**
+4. **Skip (configure manually later)**
    - Don't set authentication variables
 
-### 5. Pipeline Configuration (Optional)
+### 6. Pipeline Configuration (Optional)
 Ask: "Do you want to customize pipeline settings?" (default: No, note: "Default values work for most cases. You can change output directory or other settings if needed.")
 
 If yes, ask for:
@@ -467,15 +623,18 @@ If yes, ask for:
 - **INPUT_FILE** (default: "policy_goal.txt", note: "Relative to DATA_DIR/INPUT_DIR/")
 - **MAX_WORKERS** (default: "5", validation: Must be a positive integer)
 
-### 6. Docker Configuration (Optional)
-Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 1b")
+### 7. Docker Configuration (Optional)
+Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 2b")
 
 If yes, ask for:
-- **IMAGE_NAME** (default: value from step 1b, note: "Already configured")
-- **IMAGE_TAG** (default: value from step 1b, note: "Already configured")
+- **IMAGE_NAME** (default: value from step 2b, note: "Already configured")
+- **IMAGE_TAG** (default: value from step 2b, note: "Already configured")
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
 
-### 7. Timeout Configuration (Optional)
+**If `userSelectedMode` is `generation_with_crawler`, also ask for:**
+- **CRAWLER_CONTAINER_PREFIX** (default: "crawler-agent", note: "Prefix for crawler containers")
+
+### 8. Timeout Configuration (Optional)
 Ask: "Do you want to customize timeout settings?" (default: No, note: "Default values are usually sufficient")
 
 If yes, ask for (all in seconds, must be positive integers):
@@ -485,20 +644,39 @@ If yes, ask for (all in seconds, must be positive integers):
 - **STAGE3_TIMEOUT_BASE** (default: "180") - Summary base timeout
 - **STAGE3_TIMEOUT_PER_POLICY** (default: "60") - Summary additional timeout per policy
 
-### 8. Review Configuration Summary
+**If `userSelectedMode` is `generation_with_crawler`, also ask for:**
+- **CRAWLER_TIMEOUT** (default: "3600") - Crawler execution timeout (note: "60 minutes default, adjust based on the number of documents to crawl")
+
+### 9. Review Configuration Summary
 
 Show a summary of all configured values based on the selected workflow:
 
-**For External Repository Mode (`run.sh external`):**
-- Workflow: External Repository Mode
+**For `generation` workflow:**
+- Workflow: Generate TF Policies from Existing Database
+- Policy Database: [POLICY_DB value]
+- Input File: [policy_goal.txt path]
+- Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
+- Authentication: [AUTH_PROVIDER details]
+- Pipeline Settings: [DATA_DIR, INPUT_DIR, OUTPUT_DIR, etc.]
+
+**For `generation_with_crawler` workflow:**
+- Workflow: Generate TF Policies with Crawler
+- Input File: [policy_goal.txt path]
+- Crawler Configuration: [crawler settings if configured]
+- Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
+- Authentication: [AUTH_PROVIDER details]
+- Pipeline Settings: [DATA_DIR, INPUT_DIR, OUTPUT_DIR, etc.]
+
+**For `conversion_external` workflow:**
+- Workflow: Convert from Sentinel - External Repository Mode
 - External Repository: [EXTERNAL_REPO_DIR value]
 - Sentinel HCL: [SENTINEL_HCL_PATH value or "Not configured"]
 - Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
 - Authentication: [AUTH_PROVIDER details]
 - Pipeline Settings: [DATA_DIR, INPUT_DIR, OUTPUT_DIR, etc.]
 
-**For Local Mode (`run.sh local`):**
-- Workflow: Local Mode
+**For `conversion_local` workflow:**
+- Workflow: Convert from Sentinel - Local Mode
 - Data Directory: [DATA_DIR value]
 - Input Directory: [INPUT_DIR value]
 - Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
@@ -509,17 +687,30 @@ Ask: "Does this configuration look correct?" (default: Yes)
 - If No: Allow user to go back and modify settings
 - If Yes: Proceed to generate .env file
 
-### 9. Generate and Preview .env File
+### 10. Generate and Preview .env File
 
 **Generate .env file content based on selected workflow.**
 
-**For External Repository Mode (`run.sh external`):**
+**For `generation` workflow:**
+- Include: POLICY_DB
+- Include all standard configuration
+- Do NOT include: EXTERNAL_REPO_DIR, SENTINEL_HCL_PATH, or crawler-specific settings
+
+**For `generation_with_crawler` workflow:**
+- Include: CRAWLER_CONTAINER_PREFIX (if configured)
+- Include: CRAWLER_TIMEOUT (if configured)
+- Include: POLICY_DB — force set to `database/policy_spec_db.jsonl` (this is where the crawler creates the database)
+- Include all standard configuration
+- Do NOT include: EXTERNAL_REPO_DIR or SENTINEL_HCL_PATH
+
+**For `conversion_external` workflow:**
 - MUST include: EXTERNAL_REPO_DIR
 - MUST include: SENTINEL_HCL_PATH (if configured)
 - Include all standard configuration
+- Do NOT include: crawler-specific settings
 
-**For Local Mode (`run.sh local`):**
-- Do NOT include: EXTERNAL_REPO_DIR or SENTINEL_HCL_PATH
+**For `conversion_local` workflow:**
+- Do NOT include: EXTERNAL_REPO_DIR, SENTINEL_HCL_PATH, or crawler-specific settings
 - Include all standard configuration
 
 Generate the `.env` file content with this structure:
@@ -535,10 +726,6 @@ Generate the `.env` file content with this structure:
 TERRAFORM_BINARY_PATH=<value>
 TFPOLICY_BINARY_PATH=<value>
 
-# MCP Server Configuration (already set in Dockerfile, no need to change)
-POLICY_DB=database/policy_spec_db.jsonl
-POLICY_SUMMARY=database/POLICY_SUMMARY.md
-
 # ============================================================================
 # Execution Mode: OpenCode
 # ============================================================================
@@ -546,6 +733,11 @@ AUTH_PROVIDER=<value>
 MODEL_BASE_URL=<value>
 MODEL_NAME=<value>
 MODEL_API_KEY=<PLEASE_FILL_IN_MANUALLY>  # ⚠️ Fill in your API key manually
+
+# For Amazon Bedrock:
+# AUTH_PROVIDER=amazon-bedrock
+# MODEL_NAME=anthropic.claude-opus-4-5-20251101-v1:0
+# MODEL_API_KEY=<PLEASE_FILL_IN_MANUALLY>  # ⚠️ Fill in your base64-encoded Bearer Token manually
 
 # For GitHub Copilot:
 # GITHUB_COPILOT_ACCESS_TOKEN=<PLEASE_FILL_IN_MANUALLY>  # ⚠️ Fill in manually
@@ -566,13 +758,15 @@ MAX_WORKERS=<value>
 [... optional Timeout configuration section ...]
 
 [... optional External Repository section ...]
+
+[... optional Crawler and Policy database section ...]
 ```
 
 **Important:** For secret variables (API keys, tokens), use placeholder text like `<PLEASE_FILL_IN_MANUALLY>` with a warning comment. Never include actual secret values in the generated file.
 
 Show the preview to the user and ask for confirmation.
 
-### 10. Save Configuration and Next Steps
+### 11. Save Configuration and Next Steps
 
 Ask: "Save this configuration to .env file?" (default: Yes)
 
@@ -583,11 +777,44 @@ If yes:
 - Show success message: "✅ Successfully created .env file at: <path>"
 - **Important reminder:** "⚠️ Don't forget to manually fill in secret values (API keys, tokens) marked with <PLEASE_FILL_IN_MANUALLY> in the .env file"
 
-### 11. Final Configuration Check and Next Steps
+### 12. Final Configuration Check and Next Steps
 
 After saving the `.env` file, verify the configuration based on the selected workflow:
 
-**For External Repository Mode:**
+**For `generation` workflow:**
+Run a configuration check:
+```bash
+# Check env, system, and database first
+./pre-check.sh docker env binaries image mcp database local output
+```
+
+This will verify:
+- 🟢 **docker**: Docker daemon is running (already checked in step 2)
+- 🟢 **env**: Environment variables are properly configured
+- 🟢 **binaries**: terraform and tfpolicy binaries are available
+- 🟢 **image**: Docker image is available (already checked in step 2)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+- 🟢 **database**: Policy database is configured and exists
+- 🟢 **output**: OUTPUT_DIR is empty (ready for pipeline execution)
+- 🟢 **local**: EXTERNAL_REPO_DIR is not set
+
+**For `generation_with_crawler` workflow:**
+Run a configuration check:
+```bash
+# Check env and system first
+./pre-check.sh docker env binaries image mcp local output
+```
+
+This will verify:
+- 🟢 **docker**: Docker daemon is running (already checked in step 2)
+- 🟢 **env**: Environment variables are properly configured
+- 🟢 **binaries**: terraform and tfpolicy binaries are available
+- 🟢 **image**: Docker image is available (already checked in step 2)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+- 🟢 **output**: OUTPUT_DIR is empty (ready for pipeline execution)
+- 🟢 **local**: EXTERNAL_REPO_DIR is not set
+
+**For `conversion_external` workflow:**
 Run a configuration check (input files not needed yet):
 ```bash
 # Check env and system (skip input check for external mode)
@@ -595,13 +822,13 @@ Run a configuration check (input files not needed yet):
 ```
 
 This will verify:
-- 🟢 **docker**: Docker daemon is running (already checked in step 1)
+- 🟢 **docker**: Docker daemon is running (already checked in step 2)
 - 🟢 **env**: Environment variables are properly configured
-- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 3)
-- 🟢 **image**: Docker image is available (already checked in step 1)
-- 🟢 **mcp**: MCP server is accessible (already checked in step 1)
+- 🟢 **binaries**: terraform and tfpolicy binaries are available
+- 🟢 **image**: Docker image is available (already checked in step 2)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
 
-**For Local Mode:**
+**For `conversion_local` workflow:**
 Run a configuration check (input files may not be ready yet):
 ```bash
 # Check env and system first
@@ -609,12 +836,12 @@ Run a configuration check (input files may not be ready yet):
 ```
 
 This will verify:
-- 🟢 **docker**: Docker daemon is running (already checked in step 1)
+- 🟢 **docker**: Docker daemon is running (already checked in step 2)
 - 🟢 **env**: Environment variables are properly configured
-- 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 3)
-- 🟢 **image**: Docker image is available (already checked in step 1)
-- 🟢 **mcp**: MCP server is accessible (already checked in step 1)
-- 🟢 **output**: OUTPUT_DIR is empty
+- 🟢 **binaries**: terraform and tfpolicy binaries are available
+- 🟢 **image**: Docker image is available (already checked in step 2)
+- 🟢 **mcp**: MCP server is accessible (already checked in step 2)
+- 🟢 **output**: OUTPUT_DIR is empty (ready for pipeline execution)
 - 🟢 **local**: EXTERNAL_REPO_DIR is not set
 
 **Note:** Input file check is intentionally skipped here because users often prepare the data directory after creating `.env`. You can run `./pre-check.sh input` later after setting up your data directory.
@@ -633,7 +860,39 @@ This will verify:
 
 **Show next steps based on selected workflow:**
 
-**For External Repository Mode (`run.sh external`):**
+**For `generation` workflow:**
+```
+📋 Next Steps:
+1. Fill in secret values (API keys, tokens) in .env file
+2. Verify input files are ready: ./pre-check.sh input
+3. Run the pipeline with: ./run.sh local
+
+The script will:
+- Read policy specifications from the database
+- Generate TF policies based on policy_goal.txt
+- Output results to DATA_DIR/OUTPUT_DIR/
+```
+
+**For `generation_with_crawler` workflow:**
+```
+📋 Next Steps:
+1. Fill in secret values (API keys, tokens) in .env file
+2. Execute crawler workflow:
+   2.1. Run the crawler first (for crawling): ./run-crawler.sh add
+   2.2. Modify crawler/crawler_goal.txt to specify the path to the generated delta file
+        (See the generated crawler/guide/guide_{timestamp}.md for details)
+   2.3. Run the crawler second (for applying): ./run-crawler.sh apply
+3. Verify input files are ready: ./pre-check.sh input
+4. Ensure your policy_goal.txt is ready at: DATA_DIR/INPUT_DIR/policy_goal.txt
+5. Run the pipeline with: ./run.sh local
+
+The script will:
+- First, crawler extracts policy specifications from sources
+- Then, generate TF policies based on policy_goal.txt using the extracted policy specifications
+- Output results to DATA_DIR/OUTPUT_DIR/
+```
+
+**For `conversion_external` workflow:**
 ```
 📋 Next Steps:
 1. Fill in secret values (API keys, tokens) in .env file
@@ -648,7 +907,7 @@ The script will automatically:
 Note: Input directory setup is not needed for external mode.
 ```
 
-**For Local Mode (`run.sh local`):**
+**For `conversion_local` workflow:**
 ```
 📋 Next Steps:
 1. Fill in secret values (API keys, tokens) in .env file

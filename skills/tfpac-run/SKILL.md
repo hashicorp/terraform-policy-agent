@@ -43,6 +43,7 @@ After running this command, interpret every environment variable as its actual r
 
 You only need to interpret the instructions with substituted values — never modify the skill file itself.
 
+
 # Operating Terraform PAC Pipeline
 
 Use this skill when working with the Terraform Policy Automation pipeline in this repository.
@@ -63,19 +64,40 @@ Keep the user informed about the current step and do not skip prerequisite valid
 **Ask the user: "Which workflow do you want to use?"**
 
 **Options:**
-1. **Convert from Sentinel - Manual Setup (conversion_local)**
+1. **Generate TF Policies from Existing Database (generation)**
+   - Use existing policy database (POLICY_DB)
+   - Generate TF policies based on specifications already in the database
+   - No crawler execution needed
+
+2. **Generate TF Policies with Crawler (generation_with_crawler)**
+   - Extract policy specifications from URLs, PDFs, or other documents using crawler
+   - Create policy database
+   - Generate TF policies from newly extracted specifications
+   - Requires crawler configuration
+
+3. **Convert from Sentinel - Manual Setup (conversion_local)**
    - Convert existing Sentinel policies to TF policies
    - Manual data directory setup
 
-2. **Convert from Sentinel - External Repository (conversion_external)**
+4. **Convert from Sentinel - External Repository (conversion_external)**
    - Convert Sentinel policies from an external repository
    - Automatic extraction and conversion
 
-Store the user's choice as one of: `conversion_local` or `conversion_external`.
+Store the user's choice as one of: `generation`, `generation_with_crawler`, `conversion_local`, or `conversion_external`.
 
 ### Step 2: Prerequisite Check
 
 Run the precheck script based on the selected workflow:
+
+**For `generation` workflow:**
+```bash
+./pre-check.sh docker env binaries image mcp input database local
+```
+
+**For `generation_with_crawler` workflow:**
+```bash
+./pre-check.sh docker env binaries image mcp input local
+```
 
 **For `conversion_local` workflow:**
 ```bash

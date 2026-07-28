@@ -24,7 +24,7 @@ nohup <command> > <command_name>.log 2>&1 & echo $!
 This returns the PID of the background shell process and writes stdout and stderr to a log file named after the command.
 
 When using background mode, inform the user:
-- Logs are written to `<command_name>.log` (e.g., `run.sh.log`)
+- Logs are written to `<command_name>.log` (e.g., `run.sh.log`, `run-crawler.sh.log`)
 - They can inspect progress with `tail -f <command_name>.log`
 - `./stop.sh` can be used as a container cleanup fallback
 
@@ -49,6 +49,55 @@ Do not delete or move existing user files without explicit confirmation.
 After that (or immediately for `conversion_external`), execute the appropriate command based on the selected workflow:
 
 **NOTE: Before executing any command, always ask the user for confirmation. When asking for permission, first run the applicable `docker ps` check below and include any warning in the same confirmation message. Wait for explicit approval (e.g., "yes" or "no") before running it. Do not execute commands without user consent.**
+
+### For `generation` workflow:
+
+Before presenting the confirmation request, check:
+```bash
+docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+```
+If containers are found, include this warning in the confirmation message:
+> ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
+
+```bash
+nohup ./run.sh local > run.sh.log 2>&1 & echo $!
+```
+
+### For `generation_with_crawler` workflow:
+
+First run the crawler to extract and add policy specifications to the database.
+
+Before presenting the confirmation request for `./run-crawler.sh add`, check:
+```bash
+docker ps --format '{{.Names}}' | grep "^${CRAWLER_CONTAINER_PREFIX:-crawler-agent}"
+```
+If containers are found, include this warning in the confirmation message:
+> ⚠️ **Warning:** A container with name `{CRAWLER_CONTAINER_PREFIX}` is already running. It is recommended to stop it or wait until it finishes before proceeding.
+
+```bash
+nohup ./run-crawler.sh add > run-crawler.sh.log 2>&1 & echo $!
+```
+
+**Ask the user: "Please review the generated delta file in `crawler/report/delta/` and verify the policy information to be added is correct. May I proceed to update `crawler/crawler_goal.txt` with the delta file path and apply? (Yes/No)"**
+
+After receiving Yes confirmation, update the file. Before presenting the confirmation request for `./run-crawler.sh apply`, run the same crawler prefix check above and include any warning, then execute:
+
+```bash
+nohup ./run-crawler.sh apply > run-crawler.sh.log 2>&1 & echo $!
+```
+
+**⚠️ CRITICAL: After crawler execution, you MUST run the policy generation pipeline. Do not forget this step!**
+
+Then run the policy generation pipeline. Before presenting the confirmation request for `./run.sh local`, check:
+```bash
+docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+```
+If containers are found, include this warning in the confirmation message:
+> ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
+
+```bash
+nohup ./run.sh local > run.sh.log 2>&1 & echo $!
+```
 
 ### For `conversion_local` workflow:
 
@@ -87,6 +136,8 @@ The run may take around 10 minutes depending on model latency and the number of 
 
 ## Monitoring Progress
 
+**NOTE: This monitoring process applies to both `./run.sh` execution and both `./run-crawler.sh` executions (add and apply). Monitor each command separately using the same process described below.**
+
 ### During execution:
 
 After starting the pipeline in background mode, ask the user how often they want progress reports:
@@ -97,7 +148,8 @@ Provide ONLY these clickable suggestions: 30, 60 (default), 90, custom input.
 
 Then repeat the following cycle:
 1. Sleep for the specified interval (use `sleep <seconds>` command - do not count manually)
-2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
+2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` or `crawler/log` (only for crawler execution) to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
+   - For `crawler/log`: `crawler_{timestamp}` files are the main execution logs, and `guide_{timestamp}` files are logs for generating next-step guidance for the user. When multiple `crawler_*` or `guide_*` logs exist, only report on the files with the most recent timestamp.
 3. Summarize the current activity based on what you read from the logs. Report only facts from the log content, avoid speculation or assumptions.
 4. Always include the total line count: `Log line count total: <sum of all log file line counts>`
    - **Note:** This metric is essential to quantitatively show the user how much progress has been made and confirm that execution is actually progressing.
