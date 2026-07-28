@@ -1,4 +1,4 @@
-# terraform-policy-agent Quick Start Guide
+# terraform-pac-agent Quick Start Guide
 
 ## Getting Started
 
@@ -8,10 +8,14 @@ Prepare this folder.
 Your workspace should contain:
 ```sh
 $ ls
-README.md           run.sh              stop.sh
-sample-data/        run_pipeline.py     skills/
-.env.example
+README.md                       pre-check.sh                    run_with_local_preparation.sh
+USER_GUIDE.md                   pre_check.py                    sample-data
+append_footer.py                run-crawler.sh                  crawler                         
+run.sh                          skills                          file_footer.hcl.template
+run_crawler.py                  stop.sh                         github-copilot-access-setup.png
+run_pipeline.py                 photo                           run_with_external_repo.sh
 ```
+
 
 ### 2. Prerequisites
 
@@ -25,17 +29,17 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1
 ```
 
 **Required Binaries**:
 
 Download the following **Linux** binaries (used inside the container). The architecture must match your host machine:
 
-- **Terraform CLI**: Currently in beta, https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
+- **Terraform CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
   - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
-- **TFPolicy CLI**: Currently in beta, https://releases.hashicorp.com/tfpolicy/0.1.0/
+- **TFPolicy CLI**: Currently in beta. Contact your HashiCorp representative to obtain the binary.
   - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
 **Required MCP Server**:
@@ -74,7 +78,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1 \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -129,18 +133,6 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
 
-**Option C: Amazon Bedrock (Bearer Token)**
-
-```bash
-AUTH_PROVIDER=amazon-bedrock
-MODEL_NAME=anthropic.claude-opus-4-5-20251101-v1:0
-MODEL_API_KEY=your-base64-encoded-bearer-token
-```
-
-- `AUTH_PROVIDER`: Set to `amazon-bedrock`
-- `MODEL_NAME`: Bedrock model ID (e.g., `anthropic.claude-opus-4-5-20251101-v1:0`)
-- `MODEL_API_KEY`: Your Bedrock Bearer Token (Base64 encoded API key)
-
 **How to get GitHub Copilot tokens:**
 
 **Recommended: Using Docker container (no local installation required)**
@@ -149,7 +141,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1 \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -200,8 +192,8 @@ OUTPUT_DIR=output
 
 # Execution
 MAX_WORKERS=5
-IMAGE_NAME=icr.io/terraform-policy-agent-2026/terraform-pac-agent
-IMAGE_TAG=0.0.29
+IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
+IMAGE_TAG=0.0.27.full.0.0.1
 
 # Stage 0: Extraction timeout
 STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
@@ -215,6 +207,13 @@ STAGE2_TIMEOUT=900  # Optional, defaults to 900 (15 minutes)
 # Stage 3: Summary Generation timeout
 STAGE3_TIMEOUT_BASE=180  # Optional, defaults to 180 (3 minutes base)
 STAGE3_TIMEOUT_PER_POLICY=60  # Optional, defaults to 60 (1 minute per policy)
+
+# If using the crawler
+# CRAWLER_TIMEOUT=3600 # Optional, defaults to 3600 (60 minutes)
+
+# If you want to generate policies based on control IDs or natural language input
+# You have to set policy spec database path
+# POLICY_DB=database/policy_spec_db.jsonl  # Optional, defaults to database/policy_spec_db.jsonl (if you run the crawler, the database will be created at this path)
 ```
 
 ## Usage
@@ -250,127 +249,71 @@ The pre-flight check will verify:
 
 If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
 
-### Primary Use Case: External Repository Integration
+### Generation
 
-To convert Sentinel libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
+**Step 1: Prepare Policy Spec Database**
 
-Example repository: https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/tree/main/policies/cloudtrail
+When generating policies from control IDs or natural language, the pipeline requires a policy specification database.
 
-**Step 1: Download or clone the external repository**
-
-```bash
-# Option A: Download and extract
-curl -L https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/archive/refs/heads/main.zip -o repo.zip
-unzip repo.zip -d /tmp
-
-# Option B: Clone the repository
-git clone https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform.git /tmp/sentinel-repo
-```
-
-**Step 2: Set the external repository path in `.env`**
+**If you already have a database**, set its path in `.env`:
 
 ```bash
-EXTERNAL_REPO_DIR=/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail
+POLICY_DB=database/policy_spec_db.jsonl
 ```
+
+Skip to **Step 2: Create Input File**
+
+**If you do not have a database yet**, build one with the following steps:
+
+**Step 1.1:** Create `crawler/crawler_goal.txt` and specify the data source:
+
+```
+https://docs.aws.amazon.com/securityhub/latest/userguide/cloudfront-controls.html
+```
+
+**Step 1.2:** Crawl the data source to generate pending changes:
+
+```bash
+./run-crawler.sh add
+```
+
+**Step 1.3:** Review the pending changes in `crawler/report/delta/{timestamp}.jsonl`. If the content looks correct, set that file as the input in `crawler/crawler_goal.txt`:
+
+```
+report/delta/{timestamp}.jsonl
+```
+
+**Step 1.4:** Apply the changes to create the database:
+
+```bash
+./run-crawler.sh apply
+```
+
+This produces `database/policy_spec_db.jsonl`.
+
+> For full crawler documentation, see [`crawler/README.md`](crawler/README.md).
+
+**Step 2: Create Input File**
+
+Create `data/input/policy_goal.txt` with your target policy information:
+
+**Option A: Control IDs**
+````
+Generate TF Policy for
+SecurityHub: CloudFront.6
+````
+
+**Option B: Natural Language**
+````
+Generate TF Policy for
+Ensure that EC2 instances have detailed monitoring enabled.
+````
 
 **Step 3: Run the pipeline**
 
 ```bash
-./run.sh  # Auto-detects external mode when EXTERNAL_REPO_DIR is set
+./run.sh local
 ```
-
-Or explicitly specify external mode:
-```bash
-./run.sh external  # Force external mode
-```
-
-The script automatically:
-- Detects `EXTERNAL_REPO_DIR` is set and runs in external mode
-- Extracts Sentinel files from the repository
-- Creates timestamped directories (`data/input-YYYYMMDD_HHMMSS/`, `data/output-YYYYMMDD_HHMMSS/`)
-- Generates policies
-- Deploys results to `EXTERNAL_REPO_DIR/tfpolicy/`
-
-Example output structure:
-
-```
-/tmp/policy-library-CIS-Policy-Set-for-AWS-Terraform-main/policies/cloudtrail/tfpolicy
-├── cloudtrail-bucket-access-logging-enabled/
-│   ├── cloudtrail-bucket-access-logging-enabled.policy.hcl
-│   ├── cloudtrail-bucket-access-logging-enabled.policytest.hcl
-│   ├── cloudtrail-bucket-access-logging-enabled.report.md
-│   └── cloudtrail-bucket-access-logging-enabled.tf
-└── ...
-```
-
-### Alternative: Local Mode (Manual Preparation)
-
-If you don't have an external repository or want to manually prepare input files:
-
-**Step 1: Prepare Data Directory**
-
-Create your `data/` directory structure. You can either:
-
-**Option A: Copy from sample-data**
-```bash
-cp -r sample-data data
-```
-
-**Option B: Create your own structure**
-```bash
-mkdir -p data/input
-# Then create your input files
-```
-
-**Step 2: Create Input File**
-
-Create `data/input/policy_goal.txt` with your Sentinel policy:
-
-**Option A: Inline Sentinel Code**
-````
-Generate TF Policy for
-```sentinel
-import "tfplan/v2" as tfplan
-import "tfresources" as tf
-
-resources = tf.plan(tfplan.planned_values.resources).type("aws_s3_bucket").resources
-violations = collection.reject(resources, func(res) {
-    return maps.get(res, "values.versioning.0.enabled", false)
-})
-
-main = rule {
-    violations is empty
-}
-```
-````
-
-**Option B: Sentinel File Paths**
-```
-Generate TF Policy for
-./data/input/sentinels/policy1.sentinel
-./data/input/sentinels/policy2.sentinel
-```
-
-**Step 3: Ensure EXTERNAL_REPO_DIR is NOT set in `.env`**
-
-Comment out or remove the `EXTERNAL_REPO_DIR` line in your `.env` file:
-
-```bash
-# EXTERNAL_REPO_DIR=/path/to/your/sentinel-repository
-```
-
-**Step 4: Run the pipeline**
-
-```bash
-./run.sh  # Auto-detects local mode when EXTERNAL_REPO_DIR is not set
-```
-
-Or explicitly specify local mode:
-```bash
-./run.sh local  # Force local mode (ignores EXTERNAL_REPO_DIR even if set)
-```
-
-The script will automatically detect that `EXTERNAL_REPO_DIR` is not set and run in local mode.
 
 **Output:**
 
@@ -383,36 +326,6 @@ stage0_extraction.log       stage3_summary.log      summary.md
 ```
 
 **Important:** The `OUTPUT_DIR` must be empty before running the full pipeline to prevent accidental overwrites. If you need to run multiple conversions, set a different `OUTPUT_DIR` in `.env` for each run (e.g., `OUTPUT_DIR=output-v2`, `OUTPUT_DIR=results-20260603`).
-
-## Pipeline Stages
-
-The pipeline runs 4 stages automatically:
-
-- **Stage 0**: Extract policy goals → `data/output/goals/`
-- **Stage 1**: Generate requirements → `data/output/PolicyName/requirement.txt`
-- **Stage 2**: Generate policies and tests → `data/output/PolicyName/*.hcl`, `*.tf`
-- **Stage 3**: Create summary → `data/output/summary.md`
-
-## Output Structure
-
-```
-data/
-├── input/
-│   └── policy_goal.txt
-└── output/
-    ├── goals/
-    │   ├── goal-001.txt
-    │   └── goal-002.txt
-    ├── PolicyName/
-    │   ├── requirement.txt
-    │   ├── <policy_name>.policy.hcl
-    │   ├── <policy_name>.policytest.hcl
-    │   ├── main.tf
-    │   ├── gwt.json
-    │   └── report.md
-    ├── summary.md
-    └── summary.json
-```
 
 ## Using the Skill with a Coding Agent
 
@@ -445,23 +358,78 @@ In your coding agent:
 - type `/skills`
 - select `tfpac-setup`
 
-The skill will then guide the workflow in this order:
+The skill will ask which workflow you want to use and guide you accordingly:
+
+- **Generation** — Generate TF policies from an existing policy spec database
+- **Generation with Crawler** — Build a policy spec database from URLs/files using the crawler, then generate TF policies
+- **Conversion** — Convert existing Sentinel policies to TF policies (external repository or manual preparation)
+
+The skill then guides the workflow in this order:
 
 1. **Input setup assistance**
    - Help create `.env` file from `.env.example`
+   - Assist with preparing policy spec database via crawler *(if Generation with Crawler workflow)*, or pointing to an existing policy spec database *(if Generation workflow)*
    - Guide creation of `data/input/policy_goal.txt`
-   - Assist with placing Sentinel files in `data/input/sentinels/` if needed
 2. **Prerequisite check**
    - Verify Docker image availability
    - Check required binaries (terraform, tfpolicy)
    - Validate MCP server connection
-3. **Pipeline run**
-   - Show how to execute the conversion pipeline with `./run.sh`
+3. **Crawler run** *(if Generation with Crawler workflow)*
+   - Show how to execute the crawler with `./run-crawler.sh`
+4. **Pipeline run**
+   - Show how to execute the pipeline with `./run.sh`
 
+### Optional: `tfpac-run` Skill
+
+You can also use the `tfpac-run` skill to have a coding agent guide you through steps 3 and 4 (crawler run and pipeline run).
+
+**For OpenCode:**
+```bash
+mkdir -p .opencode/skills
+cp -R skills/tfpac-run .opencode/skills/
+```
+
+**For GitHub Copilot CLI:**
+```bash
+mkdir -p .github/skills
+cp -R skills/tfpac-run .github/skills/
+```
+
+Then type `/skills` and select `tfpac-run` — the coding agent will guide you through executing the crawler (if needed) and the pipeline.
+
+## Pipeline Stages
+
+The pipeline (`./run.sh`) runs 4 stages automatically:
+
+- **Stage 0**: Extract policy goals → `data/output/goals/`
+- **Stage 1**: Generate requirements → `data/output/PolicyName/requirement.txt`
+- **Stage 2**: Generate policies and tests → `data/output/PolicyName/*.hcl`, `*.tf`
+- **Stage 3**: Create summary → `data/output/summary.md`
+
+## Output Structure
+
+```
+data/
+├── input/
+│   └── policy_goal.txt
+└── output/
+    ├── goals/
+    │   ├── goal-001.txt
+    │   └── goal-002.txt
+    ├── PolicyName/
+    │   ├── requirement.txt
+    │   ├── <policy_name>.policy.hcl
+    │   ├── <policy_name>.policytest.hcl
+    │   ├── main.tf
+    │   ├── gwt.json
+    │   └── report.md
+    ├── summary.md
+    └── summary.json
+```
 
 ## Advanced Usage
 
-### Run Specific Steps (Local Mode)
+### Run Specific Steps (Generation and Local Mode)
 
 ```bash
 ./run.sh local --step 0
