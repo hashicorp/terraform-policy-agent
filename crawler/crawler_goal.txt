@@ -1,0 +1,1 @@
+https://docs.aws.amazon.com/securityhub/latest/userguide/autoscaling-controls.html

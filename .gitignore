@@ -13,7 +13,6 @@ tmp
 tmp_*/
 goal.txt
 policy_goal.txt
-crawler_goal.txt
 output*/
 crawler/auto_created_scripts
 database/backups
