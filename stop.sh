@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright IBM Corp. 2026
+
 set -euo pipefail
 
 PREFIX="terraform-pac-agent-skills"

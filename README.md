@@ -1,8 +1,12 @@
 # terraform-policy-agent Quick Start Guide
 
+> **New here?** Follow **[USER_GUIDE.md](USER_GUIDE.md)** for a step-by-step walkthrough. This README is the technical quick-start reference.
+
 ## Getting Started
 
 ### 1. Setup Workspace
+
+> **NOTE:** Use the `main` branch of this repository.
 
 Prepare this folder.
 Your workspace should contain:
@@ -15,17 +19,28 @@ sample-data/        run_pipeline.py     skills/
 
 ### 2. Prerequisites
 
-The agent runs in a container, so you'll need `docker` available on your system.
+**Python**:
+
+Python 3.10 or later is required.
+
+```bash
+python3 --version  # Must be 3.10 or later
+```
+
+If Python is missing or outdated, install or update it.
 
 **Docker Image**:
 
-Pull the pre-built Docker image from the registry:
+The agent runs in a container, so you'll need `docker` available on your system.
+
+Pull the pre-built Docker image from the registry. An IBM Cloud Container Registry API key is required for the login step:
 
 ```bash
 # Login to IBM Cloud Container Registry
+# Password: enter your IBM Cloud Container Registry API key
 docker login icr.io -u iamapikey
-# When prompted, enter your API key
-docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29
+# Nothing will appear as you type — this is normal security behaviour. Do not paste twice.
+docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix
 ```
 
 **Required Binaries**:
@@ -50,7 +65,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   
   ```bash
   # Pull the Docker image
-  docker pull docker.io/hashicorp/terraform-mcp-server:0.3.3
+  docker pull docker.io/hashicorp/terraform-mcp-server:1.1.0
   
   # Run the MCP server
   docker run -d \
@@ -60,7 +75,7 @@ Download the following **Linux** binaries (used inside the container). The archi
     -e TRANSPORT_HOST=0.0.0.0 \
     -e MCP_SESSION_MODE=stateless \
     --restart unless-stopped \
-    docker.io/hashicorp/terraform-mcp-server:0.3.3
+    docker.io/hashicorp/terraform-mcp-server:1.1.0
   ```
   
   **Verify connectivity:**
@@ -74,7 +89,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -96,21 +111,7 @@ cp .env.example .env
 
 Choose one of the following authentication providers:
 
-**Option A: LiteLLM (Default)**
-
-```bash
-AUTH_PROVIDER=litellm
-MODEL_BASE_URL=https://your-litellm-endpoint.com
-MODEL_NAME=aws/claude-sonnet-4-5
-MODEL_API_KEY=sk-your-litellm-api-key
-```
-
-- `AUTH_PROVIDER`: Set to `litellm`
-- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
-- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
-- `MODEL_API_KEY`: Your LiteLLM API key
-
-**Option B: GitHub Copilot**
+**Option A: GitHub Copilot (Default)**
 
 ```bash
 AUTH_PROVIDER=github-copilot
@@ -128,6 +129,20 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 - `GITHUB_COPILOT_ACCESS_TOKEN`: Your GitHub Copilot access token
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
+
+**Option B: LiteLLM**
+
+```bash
+AUTH_PROVIDER=litellm
+MODEL_BASE_URL=https://your-litellm-endpoint.com
+MODEL_NAME=aws/claude-sonnet-4-5
+MODEL_API_KEY=sk-your-litellm-api-key
+```
+
+- `AUTH_PROVIDER`: Set to `litellm`
+- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
+- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
+- `MODEL_API_KEY`: Your LiteLLM API key
 
 **Option C: Amazon Bedrock (Bearer Token)**
 
@@ -149,7 +164,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -201,7 +216,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/terraform-policy-agent-2026/terraform-pac-agent
-IMAGE_TAG=0.0.29
+IMAGE_TAG=0.0.30-rc1-uxfix
 
 # Stage 0: Extraction timeout
 STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
@@ -386,12 +401,16 @@ stage0_extraction.log       stage3_summary.log      summary.md
 
 ## Pipeline Stages
 
-The pipeline runs 4 stages automatically:
+The pipeline runs 4 stages automatically. Each stage must complete before the next begins.
 
-- **Stage 0**: Extract policy goals → `data/output/goals/`
-- **Stage 1**: Generate requirements → `data/output/PolicyName/requirement.txt`
-- **Stage 2**: Generate policies and tests → `data/output/PolicyName/*.hcl`, `*.tf`
-- **Stage 3**: Create summary → `data/output/summary.md`
+| Stage | What it does | Output |
+|---|---|---|
+| **Stage 0** | Authenticates with the LLM provider and extracts policy goals from `policy_goal.txt` | `data/output/goals/` |
+| **Stage 1** | Generates detailed requirements for each policy goal (runs in parallel) | `data/output/PolicyName/requirement.txt` |
+| **Stage 2** | Generates policy files and tests for each requirement (runs in parallel) | `data/output/PolicyName/*.hcl`, `*.tf` |
+| **Stage 3** | Creates a consolidated summary report | `data/output/summary.md` |
+
+> **If the pipeline fails at Stage 0**, it is almost always an authentication issue. See [Troubleshooting](./TROUBLESHOOTING.md) for fixes.
 
 ## Output Structure
 

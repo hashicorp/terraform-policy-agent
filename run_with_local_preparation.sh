@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright IBM Corp. 2026
+
 set -e
 
 # Cleanup function to stop container on exit
@@ -122,7 +124,6 @@ DATA_DIR="${DATA_DIR:-./data}"
 INPUT_DIR="${INPUT_DIR:-input}"
 OUTPUT_DIR="${OUTPUT_DIR:-output}"
 INPUT_FILE="${INPUT_FILE:-policy_goal.txt}"
-DRYRUN=false
 
 # Binary paths (required for runtime mount)
 TERRAFORM_BINARY_PATH="${TERRAFORM_BINARY_PATH:-}"
@@ -208,18 +209,45 @@ show_usage() {
     echo "  --prompt \"<custom prompt>\"  Override default prompt"
 }
 
-# No arguments = run full pipeline
-if [ $# -eq 0 ]; then
-    echo "=========================================="
-    echo "Running Full Pipeline"
-    echo "=========================================="
-    echo "This will execute all 4 stages sequentially:"
-    echo "  Stage 0: Policy Extraction"
-    echo "  Stage 1: Requirement Generation"
-    echo "  Stage 2: Policy Generation"
-    echo "  Stage 3: Summary Generation"
+# Check for --dryrun flag first
+DRYRUN=false
+if [ "$1" = "--dryrun" ]; then
+    DRYRUN=true
+    shift
+fi
+
+# No arguments or --resume or --no-confirm [--resume] = run full pipeline
+NO_CONFIRM_PIPELINE=false
+if [ "$1" = "--no-confirm" ]; then
+    NO_CONFIRM_PIPELINE=true
+    shift
+fi
+
+RESUME_PIPELINE=false
+if [ "$1" = "--resume" ]; then
+    RESUME_PIPELINE=true
+    shift
+fi
+
+if [ $# -eq 0 ] && [ "$DRYRUN" = false ]; then
+    PIPELINE_ARGS=""
+    if [ "$RESUME_PIPELINE" = true ]; then
+        PIPELINE_ARGS="resume"
+        echo "=========================================="
+        echo "Resuming Pipeline (skipping completed stages)"
+        echo "=========================================="
+    else
+        echo "=========================================="
+        echo "Running Full Pipeline"
+        echo "=========================================="
+        echo "This will execute all 4 stages sequentially:"
+        echo "  Stage 0: Policy Extraction"
+        echo "  Stage 1: Requirement Generation"
+        echo "  Stage 2: Policy Generation"
+        echo "  Stage 3: Summary Generation"
+    fi
     echo ""
-    
+
     # Check if run_pipeline.py exists
     if [ ! -f "${SCRIPT_DIR}/run_pipeline.py" ]; then
         echo "ERROR: run_pipeline.py not found at ${SCRIPT_DIR}/run_pipeline.py"
@@ -227,63 +255,62 @@ if [ $# -eq 0 ]; then
         echo "Please ensure run_pipeline.py exists in docker/ directory."
         exit 1
     fi
-    
+
     # Validate environment variables
     validate_env_vars
-    
+
     # Check required binary paths
     if [ -z "$TERRAFORM_BINARY_PATH" ]; then
         echo "ERROR: TERRAFORM_BINARY_PATH environment variable not set"
         echo "Please set: export TERRAFORM_BINARY_PATH=/path/to/terraform"
         exit 1
     fi
-    
+
     if [ -z "$TFPOLICY_BINARY_PATH" ]; then
         echo "ERROR: TFPOLICY_BINARY_PATH environment variable not set"
         echo "Please set: export TFPOLICY_BINARY_PATH=/path/to/tfpolicy"
         exit 1
     fi
-    
+
     # Resolve paths before validation
     TERRAFORM_BINARY_PATH_RESOLVED=$(resolve_path "$TERRAFORM_BINARY_PATH" "file")
     TFPOLICY_BINARY_PATH_RESOLVED=$(resolve_path "$TFPOLICY_BINARY_PATH" "file")
-    
+
     # Verify binary files exist and are executable
     if [ ! -f "$TERRAFORM_BINARY_PATH_RESOLVED" ]; then
         echo "ERROR: Terraform binary not found at: $TERRAFORM_BINARY_PATH_RESOLVED"
         exit 1
     fi
-    
+
     if [ ! -x "$TERRAFORM_BINARY_PATH_RESOLVED" ]; then
         echo "ERROR: Terraform binary is not executable: $TERRAFORM_BINARY_PATH_RESOLVED"
         echo "Run: chmod +x $TERRAFORM_BINARY_PATH_RESOLVED"
         exit 1
     fi
-    
+
     if [ ! -f "$TFPOLICY_BINARY_PATH_RESOLVED" ]; then
         echo "ERROR: tfpolicy binary not found at: $TFPOLICY_BINARY_PATH_RESOLVED"
         exit 1
     fi
-    
+
     if [ ! -x "$TFPOLICY_BINARY_PATH_RESOLVED" ]; then
         echo "ERROR: tfpolicy binary is not executable: $TFPOLICY_BINARY_PATH_RESOLVED"
         echo "Run: chmod +x $TFPOLICY_BINARY_PATH_RESOLVED"
         exit 1
     fi
-    
-    # Run Python pipeline
+
+    # Run Python pipeline (with optional resume and no-confirm arguments)
     echo "Delegating to run_pipeline.py..."
     echo ""
     # MAX_WORKERS is read from environment variable in run_pipeline.py
-    python3 "${SCRIPT_DIR}/run_pipeline.py"
+    # --no-confirm is forwarded as a CLI argument to skip interactive prompts
+    PYTHON_ARGS=()
+    [ -n "$PIPELINE_ARGS" ] && PYTHON_ARGS+=("$PIPELINE_ARGS")
+    [ "$NO_CONFIRM_PIPELINE" = true ] && PYTHON_ARGS+=("no-confirm")
+    python3 "${SCRIPT_DIR}/run_pipeline.py" "${PYTHON_ARGS[@]}"
     exit $?
 fi
 
-# Check for --dryrun flag first
-if [ "$1" = "--dryrun" ]; then
-    DRYRUN=true
-    shift
-fi
 
 # Get skill from first argument
 SKILL="$1"
@@ -292,6 +319,34 @@ shift || true
 if [ "$SKILL" = "--help" ] || [ "$SKILL" = "-h" ]; then
     show_usage
     exit 0
+fi
+
+# Validate skill name
+if [ "$DRYRUN" = true ]; then
+    case "$SKILL" in
+        step0-extraction|step1-requirement|step2-generation|step3-summary|step4-validation-fixtures)
+            ;;
+        *)
+            echo "=========================================="
+            echo "  Pre-run Summary"
+            echo "=========================================="
+            if [ "${ENABLE_STAGE4:-false}" = "true" ]; then
+                echo "  Workflow : step0-extraction, step1-requirement, step2-generation, step3-summary, step4-validation-fixtures"
+            else
+                echo "  Workflow : step0-extraction, step1-requirement, step2-generation, step3-summary"
+            fi
+            if [ "$RESUME_PIPELINE" = true ]; then
+                echo "  Resume   : Skipping completed stages"
+            fi
+            INPUT_FILE_PATH="${DATA_DIR:-./data}/${INPUT_DIR:-input}/${INPUT_FILE:-policy_goal.txt}"
+            echo "  Input    : ${INPUT_FILE_PATH}"
+            echo "  Output   : ${DATA_DIR:-./data}/${OUTPUT_DIR:-output}"
+            echo "  Model    : ${AUTH_PROVIDER:-litellm} / ${MODEL_NAME:-}"
+            echo "  Image    : ${IMAGE_NAME}:${IMAGE_TAG}"
+            echo "=========================================="
+            exit 0
+            ;;
+    esac
 fi
 
 # Initialize variables
@@ -504,11 +559,44 @@ mkdir -p "${DATA_DIR_RESOLVED}/${INPUT_DIR}"
 
 OUTPUT_DIR_HOST="${DATA_DIR_RESOLVED}/${OUTPUT_DIR}"
 # Check if OUTPUT_DIR is empty for step0-extraction (unless called from run_pipeline.py)
-if [ "$SKILL" = "step0-extraction" ] && [ "${SKIP_OUTPUT_DIR_CHECK:-}" != "1" ]; then
+if [ "$SKILL" = "step0-extraction" ] && [ "${SKIP_OUTPUT_DIR_CHECK:-}" != "1" ] && [ "$DRYRUN" != true ]; then
     if [ -d "${OUTPUT_DIR_HOST}" ] && [ -n "$(find "${OUTPUT_DIR_HOST}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
-        echo "ERROR: OUTPUT_DIR already exists and is not empty: ${OUTPUT_DIR_HOST}"
-        echo "Please set a new OUTPUT_DIR in .env."
-        exit 1
+        if [ "$NO_CONFIRM_PIPELINE" = true ]; then
+            echo "ERROR: OUTPUT_DIR already exists and is not empty: ${OUTPUT_DIR_HOST}"
+            echo "Please set a new OUTPUT_DIR in .env."
+            exit 1
+        fi
+        echo ""
+        echo "⚠️  OUTPUT_DIR is not empty: ${OUTPUT_DIR_HOST}"
+        echo "Choose how to handle existing output:"
+        echo "  [1] Backup  — copy to ${DATA_DIR_RESOLVED}/.backup/output_<timestamp>, then continue"
+        echo "  [2] Clean   — delete existing output, then continue"
+        echo "  [3] Cancel  — abort"
+        while true; do
+            read -r -p "Enter choice [1/2/3]: " _CHOICE
+            case "${_CHOICE}" in
+                1)
+                    _TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+                    _BACKUP_DIR="${DATA_DIR_RESOLVED}/.backup/output_${_TIMESTAMP}"
+                    mkdir -p "${DATA_DIR_RESOLVED}/.backup"
+                    cp -r "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}"
+                    echo "✅ Backed up to: ${_BACKUP_DIR}"
+                    break
+                    ;;
+                2)
+                    rm -rf "${OUTPUT_DIR_HOST}"
+                    echo "🧹 Cleaned: ${OUTPUT_DIR_HOST}"
+                    break
+                    ;;
+                3)
+                    echo "Aborted."
+                    exit 0
+                    ;;
+                *)
+                    echo "Please enter 1, 2, or 3."
+                    ;;
+            esac
+        done
     fi
 fi
 
@@ -525,10 +613,12 @@ else
     echo "Running Terraform PaC Agent Skill"
 fi
 echo "=========================================="
-echo "Skill: ${SKILL}"
+echo "Input : ${DATA_DIR_RESOLVED}/${INPUT_DIR}/${INPUT_FILE}"
+echo "Output: ${OUTPUT_DIR_HOST}"
+echo "Model : ${MODEL_NAME}"
+echo "Skill : ${SKILL}"
 echo "Prompt: ${PROMPT}"
-echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
-echo "Model: ${MODEL_NAME}"
+echo "Image : ${IMAGE_NAME}:${IMAGE_TAG}"
 echo ""
 
 # Build the docker command with binary mounts and separate input/output mounts
@@ -591,6 +681,7 @@ fi
 
 DOCKER_CMD="docker run --rm \\
   --name \"${CONTAINER_NAME}\" \\
+  --add-host=host.docker.internal:host-gateway \\
   -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\" \\
   -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\" \\
   -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\" \\
@@ -600,6 +691,7 @@ DOCKER_CMD="docker run --rm \\
   sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
 
 if [ "$DRYRUN" = true ]; then
+
     # Print the command in dry-run mode
     echo "Docker command that would be executed:"
     echo ""
@@ -618,7 +710,7 @@ fi
 # Binaries: read-only mount to /tmp/host-binaries/ (copied to /usr/local/bin by entrypoint.sh)
 
 # Build docker run command with environment variables
-DOCKER_RUN_CMD="docker run --rm --name \"${CONTAINER_NAME}\""
+DOCKER_RUN_CMD="docker run --rm --name \"${CONTAINER_NAME}\" --add-host=host.docker.internal:host-gateway"
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\""
@@ -677,9 +769,11 @@ DOCKER_RUN_CMD="$DOCKER_RUN_CMD \"${IMAGE_NAME}:${IMAGE_TAG}\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
 
 # Execute the docker run command
-eval $DOCKER_RUN_CMD
-
-exit_code=$?
+if eval $DOCKER_RUN_CMD; then
+    exit_code=0
+else
+    exit_code=$?
+fi
 
 # Append footer to HCL files for step2-generation
 if [ $exit_code -eq 0 ] && [ "$SKILL" = "step2-generation" ]; then
@@ -712,6 +806,32 @@ if [ $exit_code -eq 0 ]; then
     echo "✅ Skill execution completed successfully"
 else
     echo "❌ Skill execution failed with exit code: $exit_code"
+    echo "⚠️  Partial output may remain in: ${OUTPUT_DIR_HOST}/"
+    if [ "$NO_CONFIRM_PIPELINE" = true ] || [ "${SKIP_FAIL_OUTPUT_CLEANUP:-0}" = "1" ]; then
+        echo "    Partial outputs left as-is — review and remove if not needed, then rerun."
+    else
+        echo ""
+        echo "Choose how to handle partial output:"
+        echo "  [1] Clean  — delete partial output now"
+        echo "  [2] Keep   — leave as-is and review manually"
+        while true; do
+            read -r -p "Enter choice [1/2]: " _CHOICE
+            case "${_CHOICE}" in
+                1)
+                    rm -rf "${OUTPUT_DIR_HOST}"
+                    echo "🧹 Cleaned: ${OUTPUT_DIR_HOST}"
+                    break
+                    ;;
+                2)
+                    echo "📁 Kept: ${OUTPUT_DIR_HOST}"
+                    break
+                    ;;
+                *)
+                    echo "Please enter 1 or 2."
+                    ;;
+            esac
+        done
+    fi
 fi
 echo "=========================================="
 echo ""

@@ -1,10 +1,14 @@
 #!/bin/bash
+# Copyright IBM Corp. 2026
+
 set -e
 
 # Parse command line arguments
 PHASE=""
 STEP=""
 MOCK_OUTPUT_DIR=""
+RESUME=false
+DRYRUN=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --phase)
@@ -18,6 +22,14 @@ while [[ $# -gt 0 ]]; do
         --mock-output)
             MOCK_OUTPUT_DIR="$2"
             shift 2
+            ;;
+        --resume)
+            RESUME=true
+            shift
+            ;;
+        --dryrun)
+            DRYRUN=true
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -112,6 +124,42 @@ echo ""
 
 # Set default values if not set
 DATA_DIR="${DATA_DIR:-./data}"
+
+# Dry-run: show summary and exit before making any changes
+if [ "$DRYRUN" = true ]; then
+    echo "=========================================="
+    echo "  Dry-run Summary"
+    echo "=========================================="
+    echo "  Input Policy Directory (external mode)  : ${EXTERNAL_REPO_DIR:-}"
+    echo "  Output   : ${DATA_DIR}/output-{timestamp}  (created at runtime)"
+    if [ -z "$PHASE" ] || [ "$PHASE" = "generate" ]; then
+        echo "  Model    : ${AUTH_PROVIDER:-litellm} / ${MODEL_NAME:-}"
+        echo "  Image    : ${IMAGE_NAME:-terraform-pac-agent-skills}:${IMAGE_TAG:-latest}"
+    fi
+    echo "=========================================="
+    echo ""
+    if [ -n "$PHASE" ]; then
+        if [ "$PHASE" = "generate" ] && [ "$RESUME" = true ]; then
+            echo "  Phase: generate only (resuming from latest checkpoint)"
+        else
+            echo "  Phase: ${PHASE} only"
+        fi
+    else
+        echo "=========================================="
+        echo "Running Full Pipeline (external mode)"
+        echo "=========================================="
+        echo "  Phase 1: Preprocess"
+        if [ "$RESUME" = true ]; then
+            echo "  Phase 2: Generate  (resuming from latest checkpoint)"
+        else
+            echo "  Phase 2: Generate"
+        fi
+        echo "  Phase 3: Postprocess"
+    fi
+    echo ""
+    echo "ℹ️  Dry-run mode: Pipeline not executed"
+    exit 0
+fi
 
 # Ensure DATA_DIR exists before resolving to an absolute path
 mkdir -p "$DATA_DIR"
@@ -399,8 +447,10 @@ if [ "$RUN_GENERATE" = true ]; then
         # Run the pipeline
         if [ -n "$STEP" ]; then
             python3 "${SCRIPT_DIR}/run_pipeline.py" --step "$STEP"
+        elif [ "$RESUME" = true ]; then
+            "${SCRIPT_DIR}/run.sh" --no-confirm --resume local
         else
-            "${SCRIPT_DIR}/run.sh" local
+            "${SCRIPT_DIR}/run.sh" --no-confirm local
         fi
 
         echo ""

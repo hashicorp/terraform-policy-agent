@@ -103,7 +103,7 @@ Review the error messages and provide concise guidance. Common issues and fixes:
 - **Binary not executable** → Run `chmod +x <path>` to add execute permission
 - **Binary arch mismatch** → Binary CPU architecture does not match the Docker image; obtain the correct architecture binary (e.g. `arm64` vs `amd64`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
 - **Binary OS mismatch** → Binary OS does not match the Docker image (e.g. `macos` binary used with a `linux` image); obtain the correct OS binary (`linux`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
-- **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:0.3.3`
+- **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:1.1.0`
 - **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
 - **OUTPUT_DIR not empty** → Delete its contents or set a new OUTPUT_DIR in `.env` before running the pipeline
 

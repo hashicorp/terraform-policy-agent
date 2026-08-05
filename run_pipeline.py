@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright IBM Corp. 2026
+
 """
 Terraform Policy Automation Agent Skills - Pipeline Execution Script
 
@@ -24,6 +26,7 @@ For individual stage execution, use docker/run.sh:
 """
 
 import os
+import shutil
 import sys
 import subprocess
 import time
@@ -125,13 +128,43 @@ class PipelineExecutor:
                 stage_value = sys.argv[stage_index + 1]
             except (ValueError, IndexError):
                 stage_value = None
-        
+
+        is_resume = "resume" in sys.argv[1:]
+        is_no_confirm = "no-confirm" in sys.argv[1:]
         should_validate_output_dir = stage_value in (None, "0")
+
         if should_validate_output_dir and self.output_dir.exists() and any(self.output_dir.iterdir()):
-            raise ValueError(
-                f"OUTPUT_DIR already exists and is not empty: {self.output_dir}. "
-                "Please set a new OUTPUT_DIR in .env."
-            )
+            if not is_no_confirm:
+                print(f"\n⚠️  OUTPUT_DIR is not empty: {self.output_dir}")
+                print("Choose how to handle existing output:")
+                print("  [1] Backup  — copy existing output to .backup/output_<timestamp>, then continue")
+                print("  [2] Clean   — delete existing output, then continue")
+                print("  [3] Cancel  — abort")
+                while True:
+                    choice = input("Enter choice [1/2/3]: ").strip()
+                    if choice == "1":
+                        import datetime
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        backup_dir = self.data_dir / ".backup" / f"output_{timestamp}"
+                        import shutil as _shutil
+                        _shutil.copytree(self.output_dir, backup_dir)
+                        print(f"✅ Backed up to: {backup_dir}")
+                        break
+                    elif choice == "2":
+                        import shutil as _shutil
+                        _shutil.rmtree(self.output_dir)
+                        print(f"🧹 Cleaned: {self.output_dir}")
+                        break
+                    elif choice == "3":
+                        print("Aborted.")
+                        sys.exit(0)
+                    else:
+                        print("Please enter 1, 2, or 3.")
+            else:
+                raise ValueError(
+                    f"OUTPUT_DIR already exists and is not empty: {self.output_dir}. "
+                    "Please set a new OUTPUT_DIR in .env."
+                )
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.goals_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +300,7 @@ class PipelineExecutor:
             # Skip OUTPUT_DIR empty check when called from run_pipeline.py
             # (run_pipeline.py creates log files in OUTPUT_DIR before calling run.sh)
             env['SKIP_OUTPUT_DIR_CHECK'] = '1'
+            env['SKIP_FAIL_OUTPUT_CLEANUP'] = '1'
             
             # Track this container
             self.running_containers.add(container_name)
@@ -283,10 +317,11 @@ class PipelineExecutor:
             
             # Stream output to both console and log file with timeout
             start_time = time.time()
-            
+            last_heartbeat = 0.0  # F-L11: track last heartbeat elapsed time
+
             # Use select for non-blocking I/O with timeout support
             import select
-            
+
             # Stream output in real-time to log file and console
             while True:
                 # Check timeout before reading
@@ -322,7 +357,14 @@ class PipelineExecutor:
                         log_handle.write(timeout_msg)
                         log_handle.close()
                     return False
-                
+
+                # F-L11: Print heartbeat every 10 seconds when not in verbose mode
+                if not verbose:
+                    if elapsed - last_heartbeat >= 10:
+                        display_elapsed = int(elapsed // 10) * 10
+                        print(f"  ⏳ {stage_name} — running ({display_elapsed}s / {timeout_seconds}s timeout)...", flush=True)
+                        last_heartbeat = elapsed
+
                 # Check if process has finished
                 if process.poll() is not None:
                     # Read any remaining output
@@ -1209,55 +1251,143 @@ class PipelineExecutor:
         
         return failed == 0
         
-    def run_full_pipeline(self) -> bool:
+    def _checkpoint_dir(self) -> Path:
+        """Root checkpoint directory: data_dir/.checkpoint/"""
+        return self.data_dir / ".checkpoint"
+
+    def _checkpoint_path(self) -> Path:
+        """Path to checkpoint JSON file."""
+        return self._checkpoint_dir() / "pipeline_checkpoint.json"
+
+    def _stage_snapshot_dir(self, stage: int) -> Path:
+        """Directory where output_dir snapshot for a stage is stored."""
+        return self._checkpoint_dir() / f"stage{stage}"
+
+    def _load_checkpoint(self) -> dict:
+        """Load checkpoint data, return empty dict if not found."""
+        cp = self._checkpoint_path()
+        if cp.exists():
+            try:
+                return json.loads(cp.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+        return {}
+
+    def _save_checkpoint(self, stage: int, duration: float = 0.0, extra: dict = None) -> None:
+        """Save completed stage: write JSON metadata + snapshot output_dir into .checkpoint/stage{N}/."""
+        # Update JSON metadata
+        data = self._load_checkpoint()
+        data[f"stage{stage}_done"] = True
+        data[f"stage{stage}_completed_at"] = datetime.now().isoformat()
+        data[f"stage{stage}_duration"] = round(duration, 2)
+        if extra:
+            data.update(extra)
+        self._checkpoint_dir().mkdir(parents=True, exist_ok=True)
+        self._checkpoint_path().write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        # Snapshot current output_dir into .checkpoint/stage{N}/
+        # Exclude .terraform directories (provider binaries / symlinks — not needed in snapshot)
+        snapshot = self._stage_snapshot_dir(stage)
+        if snapshot.exists():
+            shutil.rmtree(snapshot)
+        shutil.copytree(self.output_dir, snapshot,
+                        ignore=shutil.ignore_patterns(".terraform"))
+
+    def _restore_checkpoint(self, stage: int) -> None:
+        """Restore output_dir from .checkpoint/stage{N}/ snapshot."""
+        snapshot = self._stage_snapshot_dir(stage)
+        if not snapshot.exists():
+            return
+        if self.output_dir.exists():
+            shutil.rmtree(self.output_dir)
+        shutil.copytree(snapshot, self.output_dir)
+
+    def run_full_pipeline(self, resume: bool = False) -> bool:
         """
-        Run the complete pipeline from start to finish
-        
+        Run the complete pipeline from start to finish.
+
+        Args:
+            resume: If True, skip stages that already have a checkpoint entry.
+
         Returns:
             True if all stages successful, False otherwise
         """
         print("\n" + "="*80)
         print("Terraform Policy Automation Agent Skills - Full Pipeline")
+        if resume:
+            print("▶  Resume mode: completed stages will be skipped")
         print("="*80)
         print(f"Model: {self.model_name}")
         print(f"Container Prefix: {self.container_prefix}")
         print(f"Input: {self.input_dir}/{os.getenv('INPUT_FILE', 'policy_goal.txt')}")
         print(f"Max Workers: {self.max_workers}")
         print("="*80 + "\n")
-        
+
+        checkpoint = self._load_checkpoint() if resume else {}
+
         start_time = time.time()
-        
+
         # Stage 0: Extraction
         stage0_start = time.time()
-        if not self.stage0_extraction():
-            print("\n❌ Pipeline failed at Stage 0")
-            return False
-        stage0_duration = time.time() - stage0_start
-        
+        if checkpoint.get("stage0_done"):
+            print("⏭️  Stage 0 already completed — skipping (Resuming from Stage 1)")
+            stage0_duration = checkpoint.get("stage0_duration", 0.0)
+            self._restore_checkpoint(0)
+        else:
+            if not self.stage0_extraction():
+                print("\n❌ Pipeline failed at Stage 0")
+                return False
+            stage0_duration = time.time() - stage0_start
+            self._save_checkpoint(0, duration=stage0_duration)
+
         # Stage 1: Requirement Generation (parallel)
         stage1_start = time.time()
-        stage1_success, successful_policy_dirs = self.stage1_requirement()
-        if not stage1_success:
-            print("\n⚠️  Stage 1 had failures")
-            if not successful_policy_dirs:
-                print("❌ No policies succeeded in Stage 1, cannot proceed to Stage 2")
-                return False
-            print(f"✓ {len(successful_policy_dirs)} policy/policies succeeded and will proceed to Stage 2\n")
-        stage1_duration = time.time() - stage1_start
-        
+        if checkpoint.get("stage1_done"):
+            print("⏭️  Stage 1 already completed — skipping (Resuming from Stage 2)")
+            self._restore_checkpoint(1)
+            # Rebuild successful_policy_dirs from restored output
+            successful_policy_dirs = [
+                d.name for d in self.output_dir.iterdir()
+                if d.is_dir() and not d.name.startswith('.') and d.name != 'goals'
+                and (d / "requirement.txt").exists()
+            ]
+            stage1_duration = checkpoint.get("stage1_duration", 0.0)
+        else:
+            stage1_success, successful_policy_dirs = self.stage1_requirement()
+            if not stage1_success:
+                print("\n⚠️  Stage 1 had failures")
+                if not successful_policy_dirs:
+                    print("❌ No policies succeeded in Stage 1, cannot proceed to Stage 2")
+                    return False
+                print(f"✓ {len(successful_policy_dirs)} policy/policies succeeded and will proceed to Stage 2\n")
+            stage1_duration = time.time() - stage1_start
+            self._save_checkpoint(1, duration=stage1_duration)
+
         # Stage 2: Policy Generation (parallel) - only process successful policies from Stage 1
         stage2_start = time.time()
-        stage2_success = self.stage2_generation(policy_dirs_filter=successful_policy_dirs)
-        stage2_duration = time.time() - stage2_start
-        if not stage2_success:
-            print("\n⚠️  Stage 2 had failures, but continuing...")
-        
+        if checkpoint.get("stage2_done"):
+            print("⏭️  Stage 2 already completed — skipping (Resuming from Stage 3)")
+            stage2_duration = checkpoint.get("stage2_duration", 0.0)
+            self._restore_checkpoint(2)
+        else:
+            stage2_success = self.stage2_generation(policy_dirs_filter=successful_policy_dirs)
+            stage2_duration = time.time() - stage2_start
+            if not stage2_success:
+                print("\n⚠️  Stage 2 had failures, but continuing...")
+            self._save_checkpoint(2, duration=stage2_duration)
+
         # Stage 3: Summary
         stage3_start = time.time()
-        if not self.stage3_summary():
-            print("\n❌ Pipeline failed at Stage 3")
-            return False
-        stage3_duration = time.time() - stage3_start
+        if checkpoint.get("stage3_done"):
+            print("⏭️  Stage 3 already completed — skipping")
+            stage3_duration = checkpoint.get("stage3_duration", 0.0)
+            self._restore_checkpoint(3)
+        else:
+            if not self.stage3_summary():
+                print("\n❌ Pipeline failed at Stage 3")
+                return False
+            stage3_duration = time.time() - stage3_start
+            self._save_checkpoint(3, duration=stage3_duration)
         
         # Stage 4: Validation Fixtures Generation (parallel) - only if enabled
         stage4_duration = 0
@@ -1596,17 +1726,21 @@ def main():
     """Main entry point"""
     # Get script directory (where run_pipeline.py is located)
     script_dir = Path(__file__).parent.resolve()
-    
+
+    # Check for resume mode and no-confirm mode
+    resume = "resume" in sys.argv[1:]
+    no_confirm = "no-confirm" in sys.argv[1:]
+
     # Create executor
     try:
         executor = PipelineExecutor(script_dir)
     except ValueError as e:
         print(f"❌ Configuration error: {e}")
         sys.exit(1)
-    
+
     # Execute full pipeline
-    success = executor.run_full_pipeline()
-    
+    success = executor.run_full_pipeline(resume=resume)
+
     sys.exit(0 if success else 1)
 
 
