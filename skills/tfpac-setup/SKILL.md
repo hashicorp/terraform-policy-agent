@@ -14,7 +14,7 @@ description: Set up the environment (run this first). Guide users through an int
 
 ## Workflow Overview
 
-This wizard supports the unified `run.sh` workflow with two execution modes:
+This wizard supports the unified `run.sh` workflow with two execution modes, and guides users through the following steps to build the required environment for each mode:
 
 1. **External Repository Mode (`run.sh external`)**
    - Automatically extracts Sentinel policies from an external repository
@@ -60,6 +60,11 @@ ls -la .env.tmp
   - **Start fresh**: Delete `.env.tmp` and begin from Step 1a.
 
 > **After each step completes, immediately update `.env.tmp` with any newly confirmed values before proceeding.**
+> Also update the top of `.env.tmp` with a comment indicating the last completed step, e.g.:
+> ```
+> # LAST_COMPLETED_STEP=2b
+> ```
+> Update this comment every time a step finishes so that progress can be resumed accurately.
 
 ### 1. Pre-flight System Check
 Display: `[1/11] Pre-flight System Check`
@@ -225,6 +230,13 @@ After the user selects an option, confirm: "You selected: [selected mode]. Conti
 
 ### 2a. Local Mode - Data Directory Assistance (Only for `run.sh local`)
 
+**Immediately set the following defaults in `.env.tmp`:**
+```
+DATA_DIR=./data
+INPUT_DIR=input
+INPUT_FILE=policy_goal.txt
+```
+
 **Ask: "Do you have Sentinel policy files ready to convert?"**
 
 If **Yes**, ask:
@@ -259,9 +271,15 @@ If **No** or user declines help:
 - Validation: Directory must exist
 - Note: "This directory should contain your Sentinel policy files (.sentinel)"
 
+**Immediately write `EXTERNAL_REPO_DIR` to `.env.tmp` with the confirmed value.**
+
 **Ask: "Do you have a sentinel.hcl file to configure?"**
 - If **Yes**: Ask for `SENTINEL_HCL_PATH` (default: "./external_repo/sentinel.hcl")
-- If **No**: Skip this configuration
+- If **No**: Write `EXTERNAL_REPO_DIR=<SENTINEL_DIR>` to `.env.tmp` as a placeholder, and show:
+  ```
+  📋 Note: EXTERNAL_REPO_DIR has been set to the placeholder <SENTINEL_DIR> in `.env`.
+  Replace it with the actual path to your Sentinel repository before running the pipeline.
+  ```
 
 **Note:** The script will automatically:
 - Extract all .sentinel files from EXTERNAL_REPO_DIR
@@ -276,7 +294,29 @@ Ask the user to choose: **"Would you like to proceed or go back?"** — present 
 2. **Back** — return to Step 2
 (If user chooses Back: restart from Step 2.)
 
-**Step 3a: Detect image OS and architecture**
+**Step 3a-1: Detect host OS and architecture for binary install paths**
+
+Run the following commands to detect the host machine's OS and architecture:
+```bash
+uname -s | tr '[:upper:]' '[:lower:]'  # HOST_OS (e.g. linux, darwin)
+uname -m                                # HOST_ARCH (e.g. arm64, x86_64 → normalise to amd64)
+```
+Store the results as `HOST_OS` and `HOST_ARCH` (normalise `x86_64` → `amd64`).
+
+**Step 3a-2: Resolve binary install path defaults from the host environment**
+
+| Host OS | Host Arch | TERRAFORM_BINARY_PATH default | TFPOLICY_BINARY_PATH default |
+|---------|-----------|-------------------------------|------------------------------|
+| linux | arm64 | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| linux | amd64 | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| darwin | arm64 | `/opt/homebrew/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| darwin | amd64 | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+
+If `HOST_OS`/`HOST_ARCH` is not in the table above, use `./bin/terraform` and `./bin/tfpolicy` as fallback defaults.
+
+Store the resolved values as `_TF_DEFAULT` and `_TFP_DEFAULT`.
+
+**Step 3b-1: Detect image OS and architecture**
 
 Run the following command using `IMAGE_NAME` and `IMAGE_TAG` set in Step 1b:
 ```bash
@@ -284,30 +324,28 @@ docker image inspect [IMAGE_NAME]:[IMAGE_TAG] --format "{{.Architecture}}|{{.Os}
 ```
 Store the results as `IMAGE_ARCH` (e.g. `arm64`, `amd64`) and `IMAGE_OS` (e.g. `linux`, `darwin`).
 
-**Step 3b: Look up defaults and download URLs from the table below**
+**Step 3b-2: Look up download URLs from the table below**
 
-The binaries are mounted into and executed **inside** the Docker container, so they must match the **image's** OS and architecture — not the host machine.
+Use `IMAGE_OS`/`IMAGE_ARCH` to determine the correct download URLs for the binaries.
 
-| Image OS | Image Arch | Terraform download URL | TFPolicy download URL | TERRAFORM_BINARY_PATH default | TFPOLICY_BINARY_PATH default |
-|----------|------------|------------------------|-----------------------|-------------------------------|------------------------------|
-| linux | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_arm64.zip` | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
-| linux | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_amd64.zip` | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
-| darwin | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_arm64.zip` | `/opt/homebrew/bin/terraform` | `/usr/local/bin/tfpolicy` |
-| darwin | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_amd64.zip` | `/usr/local/bin/terraform` | `/usr/local/bin/tfpolicy` |
+| Image OS | Image Arch | Terraform download URL | TFPolicy download URL |
+|----------|------------|------------------------|-----------------------|
+| linux | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_arm64.zip` |
+| linux | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_amd64.zip` |
+| darwin | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_arm64.zip` |
+| darwin | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_amd64.zip` |
 
 **If `IMAGE_OS`/`IMAGE_ARCH` matches one of the four rows above:**
 
 Resolve the following **temporary variables**:
 - `_TF_URL` — Terraform download URL
 - `_TFP_URL` — TFPolicy download URL
-- `_TF_DEFAULT` — TERRAFORM_BINARY_PATH default
-- `_TFP_DEFAULT` — TFPOLICY_BINARY_PATH default
 
-Proceed to **Step 3c: Configure Terraform binary**.
-
----
+If matched, proceed to **Step 3c: Configure Terraform binary**.
 
 **If `IMAGE_OS`/`IMAGE_ARCH` does NOT match any row (unknown combination) → Proceed this fallback**
+
+---
 
 **Fallback 3-1: Configure Terraform binary**
 
