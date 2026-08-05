@@ -100,7 +100,7 @@ Run the precheck script based on the selected workflow:
 
 **For `conversion_external` workflow:**
 ```bash
-./pre-check.sh docker env binaries image mcp api
+./pre-check.sh docker env binaries image mcp external api
 ```
 
 **Analyze the output:**

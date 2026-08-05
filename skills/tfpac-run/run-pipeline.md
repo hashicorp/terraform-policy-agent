@@ -177,11 +177,13 @@ After starting the `nohup` command in background mode, ask the user how often th
 
 **"How often would you like to receive progress reports? (in seconds) [default: 60]"**
 
+> **Note (`SINGLE_POLICY_MODE=true`):** Since each policy runs as a separate `nohup ./run.sh` call, ask this question again after each individual run starts.
+
 Provide ONLY these clickable suggestions: 30, 60 (default), 90, custom input.
 
 Then repeat the following cycle:
 1. Sleep for the specified interval (use `sleep <seconds>` command - do not count manually)
-2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
+2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` (or `<LOG_DIR>` if `SINGLE_POLICY_MODE=true`) to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
 3. Summarize the current activity based on what you read from the logs. Report only facts from the log content, avoid speculation or assumptions.
 4. Always include the total line count: `Log line count total: <sum of all log file line counts>`
    - **Note:** This metric is essential to quantitatively show the user how much progress has been made and confirm that execution is actually progressing.

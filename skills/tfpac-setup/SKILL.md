@@ -761,7 +761,7 @@ After saving the `.env` file, verify the configuration based on the selected wor
 Run a configuration check (input files not needed yet):
 ```bash
 # Check env and system (skip input check for external mode)
-./pre-check.sh docker env binaries image mcp
+./pre-check.sh docker env binaries image mcp external
 ```
 
 This will verify:
