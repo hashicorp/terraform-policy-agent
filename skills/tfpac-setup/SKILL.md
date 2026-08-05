@@ -1,6 +1,6 @@
 ---
 name: tfpac-setup
-description: Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports the unified `run.sh` workflow, which automatically switches between local mode and external repository mode based on whether `EXTERNAL_REPO_DIR` is configured.
+description: Set up the environment (run this first). Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports the unified `run.sh` workflow, which automatically switches between local mode and external repository mode based on whether `EXTERNAL_REPO_DIR` is configured.
 ---
 
 # Skill: Interactive Environment Setup Wizard
@@ -44,16 +44,31 @@ This script automatically masks sensitive values (API keys, tokens) before displ
 - `GITHUB_COPILOT_ACCESS_TOKEN`
 - `GITHUB_COPILOT_REFRESH_TOKEN`
 
-When loading an existing .env file, use the dotenv_tool.py to safely retrieve non-secret configuration values.
+When loading an existing .env file, use the dotenv_tool.py to safely retrieve non-secret configuration values. There is no need to mention this script to the user.
 
 ## Workflow
 
+> **`.env.tmp` — progress memo:** This wizard uses `.env.tmp` as a running memo. Each environment variable is noted here as it is confirmed. If a session is interrupted, check for `.env.tmp` and resume from where it left off.
+
+**Session resume check:** Before anything else, check whether `.env.tmp` exists:
+```bash
+ls -la .env.tmp
+```
+- If **`.env.tmp` does not exist**: Proceed with a fresh setup.
+- If **`.env.tmp` exists**: Assess how far the setup has progressed based on its contents. Tell the user (e.g., "Docker image and binary paths are configured, but authentication is not yet set."). Then ask: "Would you like to continue from where you left off, or start fresh by deleting `.env.tmp`?"
+  - **Continue**: Skip already-completed steps and resume from the first incomplete step.
+  - **Start fresh**: Delete `.env.tmp` and begin from Step 1a.
+
+> **After each step completes, immediately update `.env.tmp` with any newly confirmed values before proceeding.**
+
 ### 1. Pre-flight System Check
+Display: `[1/11] Pre-flight System Check`
 
 **Before configuring the environment, verify system readiness:**
 
 **Step 1a: Check Docker availability**
-Run a simple Docker command to verify Docker is available:
+Display to the user: "Now checking if Docker is available. No files or environment settings are changed."
+Then run:
 ```bash
 docker --version
 ```
@@ -65,16 +80,16 @@ docker --version
 **Step 1b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix`
+- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.26`
 - Default: Yes
 
 If **Yes** (use recommended version):
-- Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.30-rc1-uxfix"
+- Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
+- Set `IMAGE_TAG`: "0.0.26"
 
 If **No** (custom version):
-- Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.30-rc1-uxfix")
+- Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.26")
 
 **Check if image exists locally:**
 ```bash
@@ -84,7 +99,13 @@ docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TA
 **Important:** If the output shows "Image not found locally", the image does not exist. Do not proceed until the image is pulled.
 
 **If image does not exist locally:**
-- Show message: "📦 Docker image not found locally. You need to pull it first."
+- Show message: "📦 Docker image not found locally. You need to pull it first. The image is approximately 2 GB. So let me check your available disk space first."
+- Check available disk space and display the result to the user:
+  ```bash
+  df -h .
+  ```
+  If available space is less than 6 GB, warn: "⚠️ Low disk space detected. Please free up at least 6 GB before pulling." Then stop until the user confirms they have freed up space.
+
 - **Important:** Image pull requires authentication. Show ONLY the following instructions (do not provide alternative methods):
   ```
   🔐 Authentication Required
@@ -100,62 +121,72 @@ docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TA
   ```
 - **IMPORTANT:** Do NOT suggest creating API keys or provide alternative authentication methods. Users must obtain API keys from their HashiCorp representative.
 - **Wait for user confirmation** that they have logged in successfully
-- After confirmation, pull the image:
+- After login confirmation, ask: "Ready to pull the Docker image (~2 GB). This will take several minutes on broadband. Continue? [Yes/No]"
+  - If **No**: Stop and inform the user — "Pull skipped. Re-run setup when you are ready to pull the image."
+  - If **Yes**: Display to the user: "Pulling the image now. You will see multiple download progress lines — this is normal. Please wait until it stops."
+    Then run:
 ```bash
 docker pull [IMAGE_NAME]:[IMAGE_TAG]
 ```
 
 **If image pull fails:**
-- Show error details
-- Likely cause: Authentication not completed or expired
-- Ask user to verify login and try again
+- Show the exact error output
+- Display the following recovery instructions:
+  ```
+  ❌ Pull failed. To retry manually, run:
+
+     docker login icr.io -u iamapikey
+     docker pull [IMAGE_NAME]:[IMAGE_TAG]
+
+  Once the pull succeeds, re-run tfpac-setup — it will resume from this step automatically via .env.tmp.
+  ```
 - **STOP HERE** - Do not proceed to Step 1c until the image is successfully pulled
 
 **If image pull succeeds:**
-- Show success: "✅ Docker image pulled successfully"
-- **Update .env file immediately** with the image configuration:
-  - If `.env` exists, use `dotenv_tool.py` to check current values
-  - If `IMAGE_NAME` or `IMAGE_TAG` are missing or different, update them:
-    ```bash
-    # Use apply_diff or write_to_file to update .env
-    IMAGE_NAME=[IMAGE_NAME]
-    IMAGE_TAG=[IMAGE_TAG]
-    ```
-  - Show confirmation: "✅ Updated .env with image configuration"
+- Run and display the pulled digest to the user:
+  ```bash
+  docker images --digests [IMAGE_NAME] | grep [IMAGE_TAG]
+  ```
+- Show: "✅ Pulled: [IMAGE_NAME]:[IMAGE_TAG] (digest confirmed above)"
 - Proceed to Step 1c
 
 **If image already exists:**
 - Show message: "✅ Docker image already available locally"
-- **Check and update .env file if needed**:
-  - If `.env` exists, use `dotenv_tool.py` to check current values
-  - If `IMAGE_NAME` or `IMAGE_TAG` are missing or different from the selected version, update them
-  - Show confirmation if updated: "✅ Updated .env with image configuration"
 - Proceed to Step 1c
 
-**Note:** Image name and tag are stored immediately to ensure consistency. They will be included in the final `.env` file generation in Step 9.
+**Note:** Image name and tag are stored immediately to `.env.tmp` to ensure consistency. They will be included in the final `.env` file generation in Step 9.
 
-**Step 1c: Check MCP server (Only after image is confirmed available and .env is updated)**
+**Step 1c: Check MCP server (Only after image is confirmed available)**
 
 **Prerequisites for this step:**
 - Docker image must be pulled and available locally
-- `.env` file must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 1b)
+- `.env.tmp` must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 1b)
 
 **Run MCP check:**
 ```bash
-./pre-check.sh mcp
+./pre-check.sh --tmp mcp
 ```
 
-This check uses the Docker image specified in `.env` to verify MCP server connectivity.
+This check uses the Docker image specified in `.env.tmp` to verify MCP server connectivity.
 
 - 🟢 **mcp**: MCP server is accessible at localhost:8500 via container
 
 **If MCP check fails (🔴):**
-- Show error and provide guidance on starting MCP server
-- Note: "MCP server must be running on localhost:8500 before proceeding"
-- Common issues:
-  - MCP server not started
-  - Port 8500 not accessible
-  - Docker image cannot reach host.docker.internal
+- Show the exact error from the check output
+- Display the following instructions:
+  ```
+  ❌ MCP server is not reachable. Start it with:
+
+  docker run -d --name terraform-mcp-server \
+    -p 8500:8080 \
+    -e TRANSPORT_MODE=streamable-http \
+    -e TRANSPORT_HOST=0.0.0.0 \
+    -e MCP_SESSION_MODE=stateless \
+    hashicorp/terraform-mcp-server:1.1.0
+
+  Then re-run this check: ./pre-check.sh mcp
+  ```
+- Do not proceed until the MCP check passes 🟢
 
 **If all checks pass (🟢):**
 - Proceed to workflow selection
@@ -163,9 +194,15 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
 **Note:** Binary paths and input file checks will be performed later after configuration is complete.
 
 ### 2. Workflow Selection
+Display: `[2/11] Workflow Selection`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 1b
+(If user chooses Back: restart from Step 1b.)
 
 **Ask: "Which execution mode do you want to configure for `run.sh`?"**
 
+Display the options below to the user exactly as-is.
 **Options:**
 1. **External Repository Mode (`run.sh external`)** - Recommended for existing Sentinel repositories
    - Automatically extracts Sentinel policies from your external repository
@@ -180,6 +217,9 @@ This check uses the Docker image specified in `.env` to verify MCP server connec
    - More control over which files to convert
 
 **Important:** `run.sh` is the single entry point. In practice, if `EXTERNAL_REPO_DIR` is set, the script may automatically use external mode; if it is not set, it uses local mode.
+
+After the user selects an option, confirm: "You selected: [selected mode]. Continue? [Yes/No]"
+- If **No**: Re-display the options and ask again.
 
 **Note:** If user selects option 1 (External Repository Mode), skip to step 2b. If option 2 (Local Mode), continue to step 2a.
 
@@ -230,6 +270,11 @@ If **No** or user declines help:
 - Deploy results back to the repository
 
 ### 3. Binary Paths Configuration
+Display: `[3/11] Binary Paths Configuration`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 2
+(If user chooses Back: restart from Step 2.)
 
 **Step 3a: Detect image OS and architecture**
 
@@ -291,7 +336,7 @@ Ask: "Do you already have the tfpolicy binary? [Y/n]"
 **If YES:**
 - Ask: "What is the path to your tfpolicy binary?"
   - Store as `TFPOLICY_BINARY_PATH`.
-- Proceed to **### 4. Authentication Provider Configuration**.
+- Proceed to **### Binary Paths Verification**.
 
 **If NO:**
 - Inform the user:
@@ -304,13 +349,13 @@ Ask: "Do you already have the tfpolicy binary? [Y/n]"
   ```
 - Ask: "Where did you download the tfpolicy binary?"
   - Store as `TFPOLICY_BINARY_PATH`.
-- Proceed to **### 4. Authentication Provider Configuration**.
+- Proceed to **### Binary Paths Verification**.
 
 ---
 
 **Step 3c: Configure Terraform binary**
 
-Ask: "Do you already have the Terraform binary? [Y/n]"
+Ask: "Do you already have the latest Terraform binary from https://releases.hashicorp.com/terraform ? [Y/n]"
 
 **If YES:**
 - Ask: "What is the path to your Terraform binary? [default: `_TF_DEFAULT`]"
@@ -335,13 +380,13 @@ Ask: "Do you already have the Terraform binary? [Y/n]"
   rm -rf /tmp/terraform-pac.zip /tmp/terraform-pac-tf/
   ```
   - Show success: "✅ Terraform binary placed at `TERRAFORM_BINARY_PATH`."
-  - If it fails, show the error and ask the user to obtain the binary manually from their HashiCorp representative.
+  - If it fails, show the error and ask the user to obtain the binary manually at https://releases.hashicorp.com/terraform
 
 ---
 
 **Step 3d: Configure tfpolicy binary**
 
-Ask: "Do you already have the tfpolicy binary? [Y/n]"
+Ask: "Do you already have the latest tfpolicy binary from https://releases.hashicorp.com/tfpolicy ? [Y/n]"
 
 **If YES:**
 - Ask: "What is the path to your tfpolicy binary? [default: `_TFP_DEFAULT`]"
@@ -366,26 +411,42 @@ Ask: "Do you already have the tfpolicy binary? [Y/n]"
   rm -rf /tmp/tfpolicy-pac.zip /tmp/terraform-pac-tfp/
   ```
   - Show success: "✅ tfpolicy binary placed at `TFPOLICY_BINARY_PATH`."
-  - If it fails, show the error and ask the user to obtain the binary manually from their HashiCorp representative.
+  - If it fails, show the error and ask the user to obtain the binary manually at https://releases.hashicorp.com/tfpolicy/0.1.0
+
+### Binary Paths Verification
+
+After both binary paths are confirmed, run the binary check against `.env.tmp`:
+
+```bash
+./pre-check.sh --tmp binaries
+```
+
+- 🟢 **binaries** → Proceed to **### 4. Authentication Provider Configuration**
+- 🔴 **binaries** → Show the exact error output, then restart from the appropriate step in **### 3. Binary Paths Configuration**
 
 ### 4. Authentication Provider Configuration
+Display: `[4/11] Authentication Provider Configuration`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 3
+(If user chooses Back: restart from Step 3.)
+Display the following trade-off summary before asking:
+```
+In this step, you will select one authentication provider that the pipeline uses to call the LLM. Choose from the 3 options below.
+
+Authentication options:
+  1. GitHub Copilot  — Easiest to set up. Requires a paid GitHub Copilot subscription ($10/mo+). Tokens expire and need periodic renewal.
+  2. LiteLLM        — For enterprise/team environments with an existing LiteLLM endpoint. More control, but requires an endpoint URL and API key.
+  3. Amazon Bedrock — For AWS environments. Requires a base64-encoded Bearer Token.
+
+Recommended for first-time users: GitHub Copilot (option 1).
+```
+
 Ask: "Which authentication provider do you want to use?"
 
 **Options:**
-1. **LiteLLM (Default)**
-   - Set `AUTH_PROVIDER=litellm`
-   - Ask for:
-     - `MODEL_BASE_URL` (default: "https://your-litellm-endpoint.com")
-     - `MODEL_NAME` (default: "aws/claude-sonnet-4-5")
-     - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly.
 
-2. **Amazon Bedrock (Bearer Token)**
-   - Set `AUTH_PROVIDER=amazon-bedrock`
-   - Ask for:
-     - `MODEL_NAME` (default: "anthropic.claude-opus-4-5-20251101-v1:0")
-     - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly.
-
-3. **GitHub Copilot CLI**
+1. **GitHub Copilot CLI (Default)**
    - Set `AUTH_PROVIDER=github-copilot`
    - Ask for:
      - `MODEL_NAME` (default: "claude-sonnet-4.6")
@@ -404,7 +465,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.26 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -454,20 +515,46 @@ Ask: "Which authentication provider do you want to use?"
    - Optional: `GITHUB_COPILOT_REFRESH_TOKEN` - Tell user to manually fill this in the .env file
    - Optional: `GITHUB_COPILOT_EXPIRES` - Tell user to manually fill this in the .env file (default: "0")
 
-3. **Skip (configure manually later)**
+2. **Amazon Bedrock (Bearer Token) (Default)**
+   - Set `AUTH_PROVIDER=amazon-bedrock`
+   - Ask for:
+     - `MODEL_NAME` (default: "anthropic.claude-opus-4-5-20251101-v1:0")
+     - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly. (Generate at: https://us-east-1.console.aws.amazon.com/bedrock/home)
+
+3. **LiteLLM**
+   - Set `AUTH_PROVIDER=litellm`
+   - Ask for:
+     - `MODEL_BASE_URL` (default: "https://your-litellm-endpoint.com")
+     - `MODEL_NAME` (default: "aws/claude-sonnet-4-5")
+     - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly. (Obtain from your LiteLLM endpoint administrator)
+
+4. **Skip (configure manually later)**
    - Don't set authentication variables
 
 ### 5. Pipeline Configuration (Optional)
-Ask: "Do you want to customize pipeline settings?" (default: No, note: "Default values work for most cases. You can change output directory or other settings if needed.")
+Display: `[5/11] Pipeline Configuration`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 4
+(If user chooses Back: restart from Step 4.)
 
+Always ask:
+- **OUTPUT_DIR**: "Where would you like to save the output? [default: output] (within DATA_DIR, e.g., data/output/)"
+
+Ask: "Do you want to customize other pipeline settings?" (default: No, note: "Default values work for most cases.")
 If yes, ask for:
 - **DATA_DIR** (default: "./data", note: "Relative paths are resolved from current working directory")
 - **INPUT_DIR** (default: "input", note: "Within DATA_DIR (e.g., data/input/)")
-- **OUTPUT_DIR** (default: "output", note: "Within DATA_DIR (e.g., data/output/)")
 - **INPUT_FILE** (default: "policy_goal.txt", note: "Relative to DATA_DIR/INPUT_DIR/")
 - **MAX_WORKERS** (default: "5", validation: Must be a positive integer)
 
 ### 6. Docker Configuration (Optional)
+Display: `[6/11] Docker Configuration`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 5
+(If user chooses Back: restart from Step 5.)
+
 Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 1b")
 
 If yes, ask for:
@@ -476,6 +563,12 @@ If yes, ask for:
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
 
 ### 7. Timeout Configuration (Optional)
+Display: `[7/11] Timeout Configuration`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 6
+(If user chooses Back: restart from Step 6.)
+
 Ask: "Do you want to customize timeout settings?" (default: No, note: "Default values are usually sufficient")
 
 If yes, ask for (all in seconds, must be positive integers):
@@ -486,30 +579,58 @@ If yes, ask for (all in seconds, must be positive integers):
 - **STAGE3_TIMEOUT_PER_POLICY** (default: "60") - Summary additional timeout per policy
 
 ### 8. Review Configuration Summary
+Display: `[8/11] Review Configuration Summary`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 7
+(If user chooses Back: restart from Step 7.)
 
-Show a summary of all configured values based on the selected workflow:
+Show a summary of all configured values, grouped by category:
 
 **For External Repository Mode (`run.sh external`):**
-- Workflow: External Repository Mode
-- External Repository: [EXTERNAL_REPO_DIR value]
-- Sentinel HCL: [SENTINEL_HCL_PATH value or "Not configured"]
-- Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
-- Authentication: [AUTH_PROVIDER details]
-- Pipeline Settings: [DATA_DIR, INPUT_DIR, OUTPUT_DIR, etc.]
+
+| Category | Item | Value |
+|---|---|---|
+| **Workflow** | Mode | External Repository |
+| | External Repo | [EXTERNAL_REPO_DIR] |
+| | Sentinel HCL | [SENTINEL_HCL_PATH or "N/A"] |
+| **Authentication** | Provider | [AUTH_PROVIDER] |
+| | Model | [MODEL_NAME] |
+| | API Key / Token | ⚠️ Fill in manually after setup |
+| **Binary Paths** | Terraform | [TERRAFORM_BINARY_PATH] |
+| | TFPolicy | [TFPOLICY_BINARY_PATH] |
+| **Pipeline Paths** | Data Dir | [DATA_DIR] |
+| | Input Dir | [INPUT_DIR] |
+| | Output Dir | [OUTPUT_DIR] |
+| | Input File | [INPUT_FILE] |
+| | Workers | [MAX_WORKERS] |
 
 **For Local Mode (`run.sh local`):**
-- Workflow: Local Mode
-- Data Directory: [DATA_DIR value]
-- Input Directory: [INPUT_DIR value]
-- Binary Paths: [TERRAFORM_BINARY_PATH, TFPOLICY_BINARY_PATH]
-- Authentication: [AUTH_PROVIDER details]
-- Pipeline Settings: [OUTPUT_DIR, INPUT_FILE, etc.]
+
+| Category | Item | Value |
+|---|---|---|
+| **Workflow** | Mode | Local |
+| **Authentication** | Provider | [AUTH_PROVIDER] |
+| | Model | [MODEL_NAME] |
+| | API Key / Token | ⚠️ Fill in manually after setup |
+| **Binary Paths** | Terraform | [TERRAFORM_BINARY_PATH] |
+| | TFPolicy | [TFPOLICY_BINARY_PATH] |
+| **Pipeline Paths** | Data Dir | [DATA_DIR] |
+| | Input Dir | [INPUT_DIR] |
+| | Output Dir | [OUTPUT_DIR] |
+| | Input File | [INPUT_FILE] |
+| | Workers | [MAX_WORKERS] |
 
 Ask: "Does this configuration look correct?" (default: Yes)
 - If No: Allow user to go back and modify settings
 - If Yes: Proceed to generate .env file
 
 ### 9. Generate and Preview .env File
+Display: `[9/11] Generate and Preview .env File`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 8
+(If user chooses Back: restart from Step 8.)
 
 **Generate .env file content based on selected workflow.**
 
@@ -522,7 +643,7 @@ Ask: "Does this configuration look correct?" (default: Yes)
 - Do NOT include: EXTERNAL_REPO_DIR or SENTINEL_HCL_PATH
 - Include all standard configuration
 
-Generate the `.env` file content with this structure:
+Based on the contents of `.env.tmp`, generate the `.env` file content with this structure:
 
 ```
 # ============================================================================
@@ -535,10 +656,6 @@ Generate the `.env` file content with this structure:
 TERRAFORM_BINARY_PATH=<value>
 TFPOLICY_BINARY_PATH=<value>
 
-# MCP Server Configuration (already set in Dockerfile, no need to change)
-POLICY_DB=database/policy_spec_db.jsonl
-POLICY_SUMMARY=database/POLICY_SUMMARY.md
-
 # ============================================================================
 # Execution Mode: OpenCode
 # ============================================================================
@@ -546,6 +663,11 @@ AUTH_PROVIDER=<value>
 MODEL_BASE_URL=<value>
 MODEL_NAME=<value>
 MODEL_API_KEY=<PLEASE_FILL_IN_MANUALLY>  # ⚠️ Fill in your API key manually
+
+# For Amazon Bedrock:
+# AUTH_PROVIDER=amazon-bedrock
+# MODEL_NAME=anthropic.claude-opus-4-5-20251101-v1:0
+# MODEL_API_KEY=<PLEASE_FILL_IN_MANUALLY>  # ⚠️ Fill in your base64-encoded Bearer Token manually
 
 # For GitHub Copilot:
 # GITHUB_COPILOT_ACCESS_TOKEN=<PLEASE_FILL_IN_MANUALLY>  # ⚠️ Fill in manually
@@ -573,8 +695,13 @@ MAX_WORKERS=<value>
 Show the preview to the user and ask for confirmation.
 
 ### 10. Save Configuration and Next Steps
+Display: `[10/11] Save Configuration`
 
-Ask: "Save this configuration to .env file?" (default: Yes)
+Ask: "Save this configuration to .env file? [Yes/No]"
+- If **No**: Ask "Which value would you like to change? Enter the variable name and new value (e.g. OUTPUT_DIR=my-output):"
+  - Accept input in `VARIABLE_NAME=value` format
+  - Update `.env.tmp` with the new value
+  - Restart from Step 9 to regenerate and preview the updated `.env` content
 
 If yes:
 - Check if `.env` already exists at project root (use `dotenv_tool.py` to safely check)
@@ -584,6 +711,11 @@ If yes:
 - **Important reminder:** "⚠️ Don't forget to manually fill in secret values (API keys, tokens) marked with <PLEASE_FILL_IN_MANUALLY> in the .env file"
 
 ### 11. Final Configuration Check and Next Steps
+Display: `[11/11] Final Configuration Check`
+Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
+1. **Proceed** — continue to this step
+2. **Back** — return to Step 10
+(If user chooses Back: restart from Step 10.)
 
 After saving the `.env` file, verify the configuration based on the selected workflow:
 
@@ -637,8 +769,9 @@ This will verify:
 ```
 📋 Next Steps:
 1. Fill in secret values (API keys, tokens) in .env file
-2. Ensure your external repository contains Sentinel policy files
-3. Run the pipeline with: ./run.sh external
+2. Validate API credentials: ./pre-check.sh api
+3. Ensure your external repository contains Sentinel policy files
+4. Run the pipeline with: ./run.sh external
 
 The script will automatically:
 - Extract Sentinel policies from: [EXTERNAL_REPO_DIR]
@@ -652,12 +785,13 @@ Note: Input directory setup is not needed for external mode.
 ```
 📋 Next Steps:
 1. Fill in secret values (API keys, tokens) in .env file
-2. Set up your data directory:
+2. Validate API credentials: ./pre-check.sh api
+3. Set up your data directory:
    - Create: DATA_DIR/INPUT_DIR/sentinels/
    - Copy your .sentinel files there
    - Create: DATA_DIR/INPUT_DIR/policy_goal.txt with file paths
-3. Verify input files are ready: ./pre-check.sh input
-4. Run the pipeline with: ./run.sh local
+4. Verify input files are ready: ./pre-check.sh input
+5. Run the pipeline with: ./run.sh local
 
 Note: You can prepare the data directory at any time before running the pipeline.
 ```

@@ -59,8 +59,43 @@ docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
+#### Normal mode (no `--policy` flag):
+
 ```bash
-nohup ./run.sh local > run.sh.log 2>&1 & echo $!
+nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
+```
+
+#### Single-policy mode (`SINGLE_POLICY_MODE=true`):
+
+**Step 1 — resolve LOG_DIR**
+
+Read `DATA_DIR` from `.env`:
+```bash
+python3 skills/tfpac-run/scripts/dotenv_tool.py .env
+```
+
+Compute `<LOG_DIR>` as: `DATA_DIR/log`.
+
+**Step 2 — resolve placeholders**
+
+- `<GOAL_FILE>`: List files under `DATA_DIR/OUTPUT_DIR/goals/`. Read the contents of each `goal-?.txt` file, then select the filename (not the full path) whose content most closely matches the conversion intent of `POLICY_NAME`.
+- `<POLICY_DIR>`: List directories directly under `DATA_DIR/OUTPUT_DIR/` that contain both `requirement.txt` and `report.md`. Find the one that most closely matches `POLICY_NAME` — first by directory name similarity, then if ambiguous, by reading `requirement.txt` and `report.md`. Use only the directory name (not the full path).
+
+**Step 3 — run pipeline steps (log files go under LOG_DIR)**
+
+Execute each step in order, waiting for completion before proceeding:
+
+```bash
+nohup ./run.sh --no-confirm local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
 ```
 
 ### For `conversion_external` workflow:
@@ -72,8 +107,10 @@ docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
+#### Normal mode (no `--policy` flag):
+
 ```bash
-nohup ./run.sh external > run.sh.log 2>&1 & echo $!
+nohup ./run.sh --no-confirm external > /dev/null 2>&1 & echo $!
 ```
 
 This executes all 4 stages in sequence:
@@ -85,11 +122,58 @@ This executes all 4 stages in sequence:
 
 The run may take around 10 minutes depending on model latency and the number of policies.
 
+#### Single-policy mode (`SINGLE_POLICY_MODE=true`):
+
+Execute in order:
+
+**Step 1 — preprocess**
+```bash
+./run.sh --no-confirm external --phase preprocess
+```
+
+**Step 2 — resolve env vars (DATA_DIR / INPUT_DIR / OUTPUT_DIR)**
+
+After preprocess completes, run:
+```bash
+python3 skills/tfpac-run/scripts/set_env_for_external_mode.py .env
+```
+
+This script:
+- Finds the latest `input-<timestamp>` and `output-<timestamp>` directories under `DATA_DIR`
+- Updates `DATA_DIR`, `INPUT_DIR`, `OUTPUT_DIR`, `INPUT_FILE` in `.env`
+- Prints JSON with resolved values including `log_dir` (use this as `<LOG_DIR>` below)
+
+**Step 3 — resolve placeholders**
+
+Resolve placeholders using the result of `set_env_for_external_mode.py`:
+- `<LOG_DIR>`: the `log_dir` value from the script output above
+- `<GOAL_FILE>`: List files under `DATA_DIR/OUTPUT_DIR/goals/`. Read the contents of each `goal-?.txt` file, then select the filename (not the full path) whose content most closely matches the conversion intent of `POLICY_NAME`.
+- `<POLICY_DIR>`: List directories directly under `DATA_DIR/OUTPUT_DIR/` that contain both `requirement.txt` and `report.md`. Find the one that most closely matches `POLICY_NAME` — first by directory name similarity, then if ambiguous, by reading `requirement.txt` and `report.md`. Use only the directory name (not the full path).
+
+**Step 4 — run pipeline steps (log files go under LOG_DIR)**
+```bash
+nohup ./run.sh --no-confirm local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
+```
+
+**Step 5 — postprocess**
+```bash
+./run.sh --no-confirm external --phase postprocess
+```
+
 ## Monitoring Progress
 
 ### During execution:
 
-After starting the pipeline in background mode, ask the user how often they want progress reports:
+After starting the `nohup` command in background mode, ask the user how often they want progress reports:
 
 **"How often would you like to receive progress reports? (in seconds) [default: 60]"**
 

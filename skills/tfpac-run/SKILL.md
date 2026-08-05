@@ -1,7 +1,23 @@
 ---
 name: tfpac-run
-description: Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
+description: Run policy conversion pipeline (run after setup). Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
 ---
+
+# Single-policy mode
+
+If `/tfpac-run --policy <name>` is called, or the user passes `--policy <name>`:
+
+Set `SINGLE_POLICY_MODE=true` and `POLICY_NAME=<name>`.
+
+In Step 3 (Run Pipeline), instead of the normal one-shot command, execute step by step as described in run-pipeline.md under "Single-policy mode".
+
+# Dryrun mode
+
+If `/tfpac-run --dryrun` is called, or the user passes `--dryrun`:
+
+1. Tell the user: "This is a dry run. Only pre-execution checks will be performed — the pipeline will not start."
+2. Execute Step 1 (Workflow selection) and Step 2 (Prerequisite check) only.
+3. After the prerequisite check completes, stop and do not proceed to pipeline execution.
 
 # ⚠️ IMPORTANT NOTE
 
@@ -79,12 +95,12 @@ Run the precheck script based on the selected workflow:
 
 **For `conversion_local` workflow:**
 ```bash
-./pre-check.sh docker env binaries image mcp input local
+./pre-check.sh docker env binaries image mcp input local api
 ```
 
 **For `conversion_external` workflow:**
 ```bash
-./pre-check.sh docker env binaries image mcp
+./pre-check.sh docker env binaries image mcp api
 ```
 
 **Analyze the output:**
@@ -103,9 +119,10 @@ Review the error messages and provide concise guidance. Common issues and fixes:
 - **Binary not executable** → Run `chmod +x <path>` to add execute permission
 - **Binary arch mismatch** → Binary CPU architecture does not match the Docker image; obtain the correct architecture binary (e.g. `arm64` vs `amd64`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
 - **Binary OS mismatch** → Binary OS does not match the Docker image (e.g. `macos` binary used with a `linux` image); obtain the correct OS binary (`linux`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
-- **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:1.1.0`
+- **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:0.3.3`
 - **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
 - **OUTPUT_DIR not empty** → Delete its contents or set a new OUTPUT_DIR in `.env` before running the pipeline
+- **API credentials invalid** → Re-enter correct API key, token, or model name in `.env`
 
 **Only proceed to Step 3 if status shows `✅ Status: READY`.**
 

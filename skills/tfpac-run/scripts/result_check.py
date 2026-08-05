@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Copyright IBM Corp. 2026
-
 import argparse
 import json
 import os
