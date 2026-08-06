@@ -245,6 +245,12 @@ tfpac-run  tfpac-setup
 
 This section demonstrates the actual tfpac-setup Skill execution using OpenCode. Since this is an AI Agent, you may notice minor differences between the screenshots and your execution results, but the overall flow is expected to be the same.
 
+> **NOTE 1:** After each step, you will be prompted with **Proceed** or **Back** as shown in the screenshots below. Select **Back** if you want to return and make corrections. In most cases where no correction is needed, select **Proceed** to continue.
+
+![Proceed back](photo/setup/proceed_back.png)
+
+> **NOTE 2:** Intermediate results are saved to a file called `.env.tmp` as you progress through each step. At the end, the actual `.env` file used for execution is generated from it.
+
 ### Step 8: Execute the /skills command
 
 
@@ -256,6 +262,8 @@ Type `/skills` in your coding agent to view available skills.
 
 > **OpenCode runs inside your terminal (e.g., inside the VS Code integrated terminal):** OpenCode launches as a full-screen text interface (TUI). The terminal tab will show `opencode` and the interface fills the panel completely. This is normal. To exit OpenCode and return to the regular terminal, press **Ctrl+C** or type `/exit`.
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 9: Select the tfpac-setup skill
 
 ![Select tfpac-setup](photo/setup/(2):tfpac-setup_selection.png)
@@ -264,11 +272,15 @@ Choose `tfpac-setup` from the list of available skills to start the interactive 
 
 > **Note:** `customize-opencode` may appear at the top of the skills list — ignore it. It is unrelated to this product.
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 10: Confirm tfpac-setup execution
 
 ![Confirm tfpac-setup](photo/setup/(3):tfpac-setup_execution.png)
 
 Press Enter in this state to execute the skill and begin the configuration wizard.
+
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
 ### Step 11: Docker image selection
 
@@ -278,23 +290,31 @@ Here, select the recommended Docker image (1. Yes). If the Docker image is not a
 
 > **Note:** The size of this image is large. Allow 2–5 minutes on broadband. If the pull is interrupted, re-running the command will resume automatically.
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 12: Select execution mode
 
 ![Local or External](photo/setup/(5)local_or_external.png)
 
 Here, select "2. Local Mode" to use the `data/input` directory that you copied in [Step 6: Prepare Conversion Data](#step-6-prepare-conversion-data) of [Prerequisites](#prerequisites).
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 13: Configure Terraform binary path
 
 ![Terraform Binary](photo/setup/(6)terraform_binary.png)
 
-Select **1. Yes** to have the wizard automatically download and configure the correct Terraform binary for your architecture.
+Select **2. No, download it** to have the wizard automatically download and configure the correct Terraform binary for your architecture.
+
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
 ### Step 14: Configure TFPolicy binary path
 
 ![TFPolicy Binary](photo/setup/(7)tfpolicy_binary.png)
 
-Select **1. Yes** to have the wizard automatically download and configure the correct TFPolicy binary for your architecture.
+Select **2. No, download it** to have the wizard automatically download and configure the correct TFPolicy binary for your architecture.
+
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
 ### Step 15: Select authentication provider
 
@@ -304,11 +324,15 @@ Choose your authentication method: LiteLLM (for enterprise endpoints), Amazon Be
 
 **Recommended model:** `claude-sonnet-5` — best balance of quality and cost for policy conversion.
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 16: Pipeline configuration
 
 ![Pipeline Config](photo/setup/(9)pipeline_config.png)
 
 Here, select the default (1. No). You can optionally customize pipeline settings such as data directories, input/output paths, and maximum workers for parallel processing.
+
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
 ### Step 17: Additional Docker settings
 
@@ -316,11 +340,15 @@ Here, select the default (1. No). You can optionally customize pipeline settings
 
 Here, select the default (1. No). You can optionally configure additional Docker settings like container prefix.
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 18: Timeout configuration
 
 ![Timeout Settings](photo/setup/(11)timeout.png)
 
 Here, select the default (1. No). You can optionally adjust timeout values for each pipeline stage based on your policy complexity and processing requirements. Try with default values first - they should work for most cases.
+
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
 ### Step 19: Configuration validation
 
@@ -328,11 +356,15 @@ Here, select the default (1. No). You can optionally adjust timeout values for e
 
 Confirm that all required components (Docker, MCP server, binaries, and so on) are properly configured and accessible, before creating the `.env` file. If everything looks good, select "1. Yes" to proceed.
 
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
+
 ### Step 20: Preview generated .env file
 
 ![Preview Environment](photo/setup/(13)preview_env.png)
 
 Review the generated `.env` file content before saving. If there are no issues with the configuration, select "1. Yes" to save.
+
+> **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
 
 ### Step 21: Setup completion and next steps

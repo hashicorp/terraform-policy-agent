@@ -497,6 +497,31 @@ The skill will then guide the workflow in this order:
 ./run.sh external --phase postprocess   # Deploy only
 ```
 
+### Resume from Checkpoint
+
+Interrupted runs save progress to `.checkpoint` in `DATA_DIR`. Use `--resume` to pick up from the last completed stage without re-running earlier steps:
+
+```bash
+./run.sh --resume local      # local mode
+./run.sh --resume external   # external mode
+```
+
+### Skip Confirmation Prompts (No-Confirm Mode)
+
+Pass `--no-confirm` to suppress all interactive yes/no prompts and let the pipeline run unattended:
+
+```bash
+./run.sh --no-confirm local
+./run.sh --no-confirm external
+```
+
+Both flags can be combined:
+
+```bash
+./run.sh --no-confirm --resume local
+./run.sh --no-confirm --resume external
+```
+
 ### Help
 
 ```bash
