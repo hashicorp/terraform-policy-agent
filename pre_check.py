@@ -315,6 +315,15 @@ def check_api_credentials(env: dict) -> dict:
         return {"provider": provider, "ok": False, "error": f"Unknown AUTH_PROVIDER: {provider!r}"}
 
 
+# Characters that break shell scripts and Docker volume mounts
+_PATH_UNSAFE_CHARS = r""" \t()[]{},'";!#$&*?<>|~`"""
+
+
+def check_working_directory_path(cwd: Path) -> bool:
+    path_str = str(cwd)
+    return not any(c in path_str for c in _PATH_UNSAFE_CHARS)
+
+
 def print_interactive_report(result: dict) -> None:
     """Print user-friendly interactive report"""
     print("\n" + "=" * 70)
@@ -516,6 +525,13 @@ def print_interactive_report(result: dict) -> None:
             status_text = f"Set and exists: {checks.get('external_repo_dir', '')}"
         print(f"   {status} external  : External Mode - {status_text}")
 
+    # 0. Working directory (subcommand: workdir)
+    if "workdir_ok" in checks:
+        status = "🟢" if checks["workdir_ok"] else "🔴"
+        status_text = "OK" if checks["workdir_ok"] else "Contains unsafe characters"
+        print(f"   {status} workdir   : Working Directory - {status_text}")
+        print(f"                   Path: {checks['workdir_path']}")
+
     # 11. API credentials (subcommand: api)
     if "api_credentials" in checks:
         api = checks["api_credentials"]
@@ -561,7 +577,7 @@ def main() -> int:
     check_targets = []  # list of checks to run
     use_tmp = False  # --tmp flag: read .env.tmp instead of .env
 
-    valid_subcommands = ["all", "docker", "env", "binaries", "input", "image", "mcp", "database", "output", "local", "external", "api"]
+    valid_subcommands = ["all", "docker", "env", "binaries", "input", "image", "mcp", "database", "output", "local", "external", "api", "workdir"]
     
     if len(sys.argv) > 1:
         if sys.argv[1] in ["--help", "-h"]:
@@ -569,6 +585,7 @@ def main() -> int:
             print()
             print("Subcommands (can specify multiple):")
             print("  all                 Run all checks (default)")
+            print("  workdir             Check working directory path for spaces / unsafe characters")
             print("  docker              Check Docker daemon")
             print("  env                 Check environment variables")
             print("  binaries            Check terraform/tfpolicy binaries")
@@ -594,6 +611,7 @@ def main() -> int:
             print("  pre_check.py docker binaries mcp       # Check multiple items")
             print("  pre_check.py mcp --json                # Check MCP server (JSON)")
             print("  pre_check.py --tmp mcp                 # Check MCP server using .env.tmp")
+            print("  pre_check.py workdir                   # Check working directory path only")
             return 0
         
         # Parse arguments
@@ -623,6 +641,26 @@ def main() -> int:
         "errors": [],
         "warnings": [],
     }
+
+    # Working directory check (runs first, no .env needed)
+    if "all" in check_targets or "workdir" in check_targets:
+        wd_ok = check_working_directory_path(repo_root)
+        result["checks"]["workdir_ok"] = wd_ok
+        result["checks"]["workdir_path"] = str(repo_root)
+        if not wd_ok:
+            result["ok"] = False
+            result["errors"].append(
+                f"Working directory path contains unsafe characters: {repo_root}\n"
+                "   Fix: move project to a path with only letters, numbers, hyphens, "
+                "and underscores, e.g. ~/terraform-policy-agent"
+            )
+
+    if check_targets == ["workdir"]:
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print_interactive_report(result)
+        return 0 if result["ok"] else 1
 
     # Check Docker daemon first (required for most checks)
     if "all" in check_targets or "docker" in check_targets:

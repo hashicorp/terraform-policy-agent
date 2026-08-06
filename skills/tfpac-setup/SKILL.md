@@ -48,6 +48,30 @@ When loading an existing .env file, use the dotenv_tool.py to safely retrieve no
 
 ## Workflow
 
+### GREETING (Always execute before entering the workflow below)
+
+Show the following message to the user:
+
+"""
+👋 Hello! Welcome to the Terraform Policy Agent setup wizard.
+
+This wizard will guide you through the configuration of the Terraform Policy Agent project.
+
+Setup Overview:
+  1. Environment checks      — verify Docker, images, and system readiness
+  2. Select workflow         — choose local or external repository mode
+  3. Configure binary paths  — set up Terraform and TFPolicy binaries
+  4. Configure AI provider   — select GitHub Copilot, LiteLLM, or Amazon Bedrock
+  5. Configure pipeline      — set workers, timeouts, and output paths
+  6. Configure MCP           — verify MCP server connectivity
+  7. Review settings         — confirm all configuration values
+  8. Create .env             — generate the validated configuration file
+  9. Verify configuration    — run pre-flight checks to confirm readiness
+
+When setup is complete, a validated `.env` configuration will be created and verified.
+You will then be ready to run the Terraform Policy Agent workflow.
+"""
+
 > **`.env.tmp` — progress memo:** This wizard uses `.env.tmp` as a running memo. Each environment variable is noted here as it is confirmed. If a session is interrupted, check for `.env.tmp` and resume from where it left off.
 
 **Session resume check:** Before anything else, check whether `.env.tmp` exists:
@@ -250,7 +274,23 @@ If user wants help:
 4. Show confirmation: "✅ Data directory setup complete. Files copied to data/input/sentinels/"
 
 If **No** or user declines help:
-- Show instructions:
+- Check whether `./sample-data` exists:
+  ```bash
+  ls ./sample-data
+  ```
+  - If **`./sample-data` exists**, ask: "Would you like to try with the sample data first?"
+    - If **Yes**:
+      1. Run: `cp -r sample-data data`
+      2. Write to `.env.tmp`:
+         ```
+         DATA_DIR=./data
+         INPUT_DIR=input
+         INPUT_FILE=policy_goal.txt
+         ```
+      3. Show confirmation: "✅ Sample data copied to data/. You can run the pipeline with the sample policies."
+    - If **No**: Show instructions below.
+  - If **`./sample-data` does not exist**: Show instructions below.
+- Instructions:
   ```
   📋 Manual Setup Instructions:
   1. Create directory: data/input/sentinels/
@@ -453,7 +493,15 @@ Ask: "Do you already have the latest tfpolicy binary from https://releases.hashi
 
 ### Binary Paths Verification
 
-After both binary paths are confirmed, run the binary check against `.env.tmp`:
+After both binary paths are confirmed, display a summary of the configured paths:
+
+```
+Binary Path Summary:
+  terraform : <TERRAFORM_BINARY_PATH>
+  tfpolicy  : <TFPOLICY_BINARY_PATH>
+```
+
+Then run the binary check against `.env.tmp`:
 
 ```bash
 ./pre-check.sh --tmp binaries

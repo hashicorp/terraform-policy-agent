@@ -410,7 +410,7 @@ The pipeline runs 4 stages automatically. Each stage must complete before the ne
 | **Stage 2** | Generates policy files and tests for each requirement (runs in parallel) | `data/output/PolicyName/*.hcl`, `*.tf` |
 | **Stage 3** | Creates a consolidated summary report | `data/output/summary.md` |
 
-> **If the pipeline fails at Stage 0**, it is almost always an authentication issue. See [Troubleshooting](./TROUBLESHOOTING.md) for fixes.
+> **If the pipeline fails at Stage 0**, the most likely cause is an invalid or expired API key / token. First, run `./pre-check.sh api` to confirm whether your credentials are valid. If the check fails, re-acquire your tokens and update `.env`. See [Troubleshooting](./TROUBLESHOOTING.md) for fixes.
 
 ## Output Structure
 

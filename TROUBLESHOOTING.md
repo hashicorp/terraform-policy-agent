@@ -34,11 +34,21 @@ Open VS Code, press `Cmd+Shift+P`, search for **Shell Command: Install 'code' co
 **Symptom:**
 The pipeline ran successfully before, but now fails immediately at Stage 0 with an authorization error.
 
-**Likely cause: GitHub Copilot token has expired**
+**Step 1: Check if your API credentials are still valid**
+
+Run the following command first to confirm whether the token is the cause:
+
+```bash
+./pre-check.sh api
+```
+
+- 🟢 **api** — credentials are valid. The issue is not token-related; check other Stage 0 causes above.
+- 🔴 **api** — credentials are invalid or expired. Proceed to Step 2.
+
+**Step 2: Re-acquire your GitHub Copilot tokens**
 
 GitHub Copilot access tokens expire periodically. When a token expires, the pipeline fails silently at Stage 0 with no clear indication that the token is the cause.
 
-**Fix:**
 Re-acquire your GitHub Copilot tokens by following the [**"How to get GitHub Copilot tokens"** section in the README](./README.md#how-to-get-github-copilot-tokens), then update `GITHUB_COPILOT_ACCESS_TOKEN` (and optionally `GITHUB_COPILOT_REFRESH_TOKEN` and `GITHUB_COPILOT_EXPIRES`) in your `.env` file.
 
 
@@ -98,4 +108,24 @@ If you don't have access to GitHub Copilot or Amazon Bedrock, you can run the pi
    ```
 
 > **Note:** Local models may produce lower quality conversions than cloud models. Test with a small batch first.
+
+
+---
+
+## macOS: "Terminal would like to control Script Editor" permission dialog
+
+**Symptom:**
+A system dialog appears during the pipeline run:
+> "Terminal" would like to control "Script Editor". Allowing control will provide access to documents and data in "Script Editor", and to perform actions within that app.
+
+**Fix:**
+Click **OK** to allow. The pipeline requires this Automation permission to operate correctly on macOS.
+
+**If the pipeline stops for no apparent reason — this might be why:**
+On corporate Macs managed via MDM, the Automation permission can be silently denied — no dialog appears, no error is shown, the pipeline simply stops. If you cannot identify the cause, check this first:
+
+1. Open **System Settings → Privacy & Security → Automation**
+2. Find **Terminal** in the list and ensure **Script Editor** is checked.
+
+If the toggle is greyed out, you cannot fix this yourself — ask your IT administrator to grant `com.apple.Terminal` automation access.
 

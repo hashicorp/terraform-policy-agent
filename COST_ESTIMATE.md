@@ -26,6 +26,8 @@ Amazon Bedrock is billed per token (input + output).
 
 **Estimated total cost for 10 policies (Claude Sonnet 5): $5–$10**
 
+**Recommendation:** Claude Sonnet 5 is strong and cheap
+
 > Prices are approximate and subject to AWS pricing changes. See [AWS Bedrock pricing](https://aws.amazon.com/bedrock/pricing/) for current rates.
 
 ---
