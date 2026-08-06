@@ -270,7 +270,7 @@ Type `/skills` in your coding agent to view available skills.
 
 Choose `tfpac-setup` from the list of available skills to start the interactive environment setup wizard.
 
-> **Note:** `customize-opencode` may appear at the top of the skills list — ignore it. It is unrelated to this product.
+> **NOTE:** `customize-opencode` may appear at the top of the skills list — ignore it. It is unrelated to this product.
 
 > **NOTE:** After this step, you can go back to a previous step if needed. If everything looks correct, select **proceed** to continue.
 
@@ -422,6 +422,8 @@ Type `/skills` in your coding agent to view available skills.
 ![Select tfpac-run](photo/run/(2):skills_execution.png)
 
 Choose `tfpac-run` from the list of available skills to start the policy conversion process.
+
+> **NOTE:** You can target a specific policy instead of converting all policies at once by passing a natural language identifier (such as a policy name or ID) with the `--policy` flag: `/tfpac-run --policy <identifier>`. This is useful for reducing compute cost when testing a single policy.
 
 ### Step 24: Confirm tfpac-run execution
 
