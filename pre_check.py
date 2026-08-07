@@ -911,35 +911,35 @@ def main() -> int:
             print_interactive_report(result)
         return 0 if result["ok"] else 1
 
-    # Database check
-    if "all" in check_targets or "database" in check_targets:
-        policy_db = env.get("POLICY_DB")
+    # # Database check
+    # if "all" in check_targets or "database" in check_targets:
+    #     policy_db = env.get("POLICY_DB")
         
-        if not policy_db:
-            result["ok"] = False
-            result["errors"].append("POLICY_DB environment variable is not set")
-            result["checks"]["policy_db_configured"] = False
-            result["checks"]["policy_db_exists"] = False
-        else:
-            result["checks"]["policy_db_configured"] = True
-            result["checks"]["policy_db"] = policy_db
+    #     if not policy_db:
+    #         result["ok"] = False
+    #         result["errors"].append("POLICY_DB environment variable is not set")
+    #         result["checks"]["policy_db_configured"] = False
+    #         result["checks"]["policy_db_exists"] = False
+    #     else:
+    #         result["checks"]["policy_db_configured"] = True
+    #         result["checks"]["policy_db"] = policy_db
             
-            # Check if the database file exists
-            policy_db_path = resolve_path(repo_root, policy_db)
-            db_exists = policy_db_path.exists()
-            result["checks"]["policy_db_exists"] = db_exists
+    #         # Check if the database file exists
+    #         policy_db_path = resolve_path(repo_root, policy_db)
+    #         db_exists = policy_db_path.exists()
+    #         result["checks"]["policy_db_exists"] = db_exists
             
-            if not db_exists:
-                result["ok"] = False
-                result["errors"].append(f"Policy database file not found: {policy_db}")
+    #         if not db_exists:
+    #             result["ok"] = False
+    #             result["errors"].append(f"Policy database file not found: {policy_db}")
 
-    # Early exit for database-only check
-    if check_targets == ["database"]:
-        if output_format == "json":
-            print(json.dumps(result, indent=2))
-        else:
-            print_interactive_report(result)
-        return 0 if result["ok"] else 1
+    # # Early exit for database-only check
+    # if check_targets == ["database"]:
+    #     if output_format == "json":
+    #         print(json.dumps(result, indent=2))
+    #     else:
+    #         print_interactive_report(result)
+    #     return 0 if result["ok"] else 1
 
     # Output directory check
     if "all" in check_targets or "output" in check_targets:

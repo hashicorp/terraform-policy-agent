@@ -243,10 +243,17 @@ Before running the pipeline, verify all prerequisites are met:
 ./pre-check.sh
 
 # Or check specific components
+./pre-check.sh workdir   # Working directory path only
 ./pre-check.sh docker    # Docker daemon only
-./pre-check.sh mcp       # MCP server only
-./pre-check.sh binaries  # terraform/tfpolicy binaries only
 ./pre-check.sh env       # Environment variables only
+./pre-check.sh binaries  # terraform/tfpolicy binaries only
+./pre-check.sh input     # Input file only
+./pre-check.sh image     # Docker image only
+./pre-check.sh mcp       # MCP server only
+./pre-check.sh output    # Output directory only
+./pre-check.sh local     # Local mode config only
+./pre-check.sh external  # External mode config only
+./pre-check.sh api       # API credentials only
 
 # JSON output for automation
 ./pre-check.sh --json
@@ -256,14 +263,39 @@ Before running the pipeline, verify all prerequisites are met:
 Note: `pre-check.sh` automatically detects and uses the available Python interpreter (`python3` or `python`).
 
 The pre-flight check will verify:
+- 🟢 **workdir**: Working directory path has no unsafe characters
 - 🟢 **docker**: Docker daemon is running
 - 🟢 **env**: Environment variables are properly configured
 - 🟢 **binaries**: terraform and tfpolicy binaries are available and executable
-- 🟢 **input**: Input files exist
+- 🟢 **input**: Input file exists
 - 🟢 **image**: Docker image is available
 - 🟢 **mcp**: MCP server is accessible at localhost:8500
+- 🟢 **output**: Output directory is empty (ready for pipeline)
+- 🟢 **local**: Local mode — `EXTERNAL_REPO_DIR` is not set, `INPUT_DIR`/`INPUT_FILE`/`OUTPUT_DIR` are present
+- 🟢 **external**: External mode — `EXTERNAL_REPO_DIR` is set and the directory exists
+- 🟢 **api**: API credentials are valid (tested via lightweight ping)
 
 If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
+
+**Mode-based check behaviour** — When running `./pre-check.sh` (all checks), the fully ready state looks different depending on your mode. `local` and `external` are mutually exclusive: one will always show 🔴, which is **expected and should be ignored**:
+
+| Check      | Local mode            | External mode         |
+|------------|-----------------------|---------------------- |
+| workdir    | ✅ pass               | ✅ pass               |
+| docker     | ✅ pass               | ✅ pass               |
+| env        | ✅ pass               | ✅ pass               |
+| binaries   | ✅ pass               | ✅ pass               |
+| input      | ✅ pass               | ✅ pass               |
+| image      | ✅ pass               | ✅ pass               |
+| mcp        | ✅ pass               | ✅ pass               |
+| output     | ✅ pass               | ✅ pass               |
+| api        | ✅ pass               | ✅ pass               |
+| local      | ✅ pass               | 🔴 expected — ignore  |
+| external   | 🔴 expected — ignore  | ✅ pass               |
+
+> **Local mode** (`EXTERNAL_REPO_DIR` not set): `external` shows 🔴 — this is expected, ignore it.
+
+> **External mode** (`EXTERNAL_REPO_DIR` set): `local` shows 🔴 — this is expected, ignore it.
 
 ### Primary Use Case: External Repository Integration
 
