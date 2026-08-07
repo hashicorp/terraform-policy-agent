@@ -24,7 +24,7 @@ nohup <command> > <command_name>.log 2>&1 & echo $!
 This returns the PID of the background shell process and writes stdout and stderr to a log file named after the command.
 
 When using background mode, inform the user:
-- Logs are written to `<command_name>.log` (e.g., `run.sh.log`, `run-crawler.sh.log`)
+- Logs are written to `<command_name>.log` (e.g., `run.sh.log`)
 - They can inspect progress with `tail -f <command_name>.log`
 - `./stop.sh` can be used as a container cleanup fallback
 
@@ -60,7 +60,7 @@ If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
 ```bash
-nohup ./run.sh local > run.sh.log 2>&1 & echo $!
+nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
 ```
 
 ### For `generation_with_crawler` workflow:
@@ -75,7 +75,7 @@ If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** A container with name `{CRAWLER_CONTAINER_PREFIX}` is already running. It is recommended to stop it or wait until it finishes before proceeding.
 
 ```bash
-nohup ./run-crawler.sh add > run-crawler.sh.log 2>&1 & echo $!
+nohup ./run-crawler.sh add > /dev/null 2>&1 & echo $!
 ```
 
 **Ask the user: "Please review the generated delta file in `crawler/report/delta/` and verify the policy information to be added is correct. May I proceed to update `crawler/crawler_goal.txt` with the delta file path and apply? (Yes/No)"**
@@ -83,7 +83,7 @@ nohup ./run-crawler.sh add > run-crawler.sh.log 2>&1 & echo $!
 After receiving Yes confirmation, update the file. Before presenting the confirmation request for `./run-crawler.sh apply`, run the same crawler prefix check above and include any warning, then execute:
 
 ```bash
-nohup ./run-crawler.sh apply > run-crawler.sh.log 2>&1 & echo $!
+nohup ./run-crawler.sh apply > /dev/null 2>&1 & echo $!
 ```
 
 **⚠️ CRITICAL: After crawler execution, you MUST run the policy generation pipeline. Do not forget this step!**
@@ -96,7 +96,7 @@ If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
 ```bash
-nohup ./run.sh local > run.sh.log 2>&1 & echo $!
+nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
 ```
 
 ### For `conversion_local` workflow:
@@ -108,8 +108,43 @@ docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
+#### Normal mode (no `--policy` flag):
+
 ```bash
-nohup ./run.sh local > run.sh.log 2>&1 & echo $!
+nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
+```
+
+#### Single-policy mode (`SINGLE_POLICY_MODE=true`):
+
+**Step 1 — resolve LOG_DIR**
+
+Read `DATA_DIR` from `.env`:
+```bash
+python3 skills/tfpac-run/scripts/dotenv_tool.py .env
+```
+
+Compute `<LOG_DIR>` as: `DATA_DIR/log`.
+
+**Step 2 — resolve placeholders**
+
+- `<GOAL_FILE>`: List files under `DATA_DIR/OUTPUT_DIR/goals/`. Read the contents of each `goal-?.txt` file, then select the filename (not the full path) whose content most closely matches the conversion intent of `POLICY_NAME`.
+- `<POLICY_DIR>`: List directories directly under `DATA_DIR/OUTPUT_DIR/` that contain both `requirement.txt` and `report.md`. Find the one that most closely matches `POLICY_NAME` — first by directory name similarity, then if ambiguous, by reading `requirement.txt` and `report.md`. Use only the directory name (not the full path).
+
+**Step 3 — run pipeline steps (log files go under LOG_DIR)**
+
+Execute each step in order, waiting for completion before proceeding:
+
+```bash
+nohup ./run.sh --no-confirm local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
 ```
 
 ### For `conversion_external` workflow:
@@ -121,8 +156,10 @@ docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
+#### Normal mode (no `--policy` flag):
+
 ```bash
-nohup ./run.sh external > run.sh.log 2>&1 & echo $!
+nohup ./run.sh --no-confirm external > /dev/null 2>&1 & echo $!
 ```
 
 This executes all 4 stages in sequence:
@@ -134,21 +171,71 @@ This executes all 4 stages in sequence:
 
 The run may take around 10 minutes depending on model latency and the number of policies.
 
+#### Single-policy mode (`SINGLE_POLICY_MODE=true`):
+
+Execute in order:
+
+**Step 1 — preprocess**
+```bash
+./run.sh --no-confirm external --phase preprocess
+```
+
+**Step 2 — resolve env vars (DATA_DIR / INPUT_DIR / OUTPUT_DIR)**
+
+After preprocess completes, run:
+```bash
+python3 skills/tfpac-run/scripts/set_env_for_external_mode.py .env
+```
+
+This script:
+- Finds the latest `input-<timestamp>` and `output-<timestamp>` directories under `DATA_DIR`
+- Updates `DATA_DIR`, `INPUT_DIR`, `OUTPUT_DIR`, `INPUT_FILE` in `.env`
+- Prints JSON with resolved values including `log_dir` (use this as `<LOG_DIR>` below)
+
+**Step 3 — resolve placeholders**
+
+Resolve placeholders using the result of `set_env_for_external_mode.py`:
+- `<LOG_DIR>`: the `log_dir` value from the script output above
+- `<GOAL_FILE>`: List files under `DATA_DIR/OUTPUT_DIR/goals/`. Read the contents of each `goal-?.txt` file, then select the filename (not the full path) whose content most closely matches the conversion intent of `POLICY_NAME`.
+- `<POLICY_DIR>`: List directories directly under `DATA_DIR/OUTPUT_DIR/` that contain both `requirement.txt` and `report.md`. Find the one that most closely matches `POLICY_NAME` — first by directory name similarity, then if ambiguous, by reading `requirement.txt` and `report.md`. Use only the directory name (not the full path).
+
+**Step 4 — run pipeline steps (log files go under LOG_DIR)**
+```bash
+nohup ./run.sh --no-confirm local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
+```
+```bash
+nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
+```
+
+**Step 5 — postprocess**
+```bash
+./run.sh --no-confirm external --phase postprocess
+```
+
+
 ## Monitoring Progress
 
 **NOTE: This monitoring process applies to both `./run.sh` execution and both `./run-crawler.sh` executions (add and apply). Monitor each command separately using the same process described below.**
 
 ### During execution:
 
-After starting the pipeline in background mode, ask the user how often they want progress reports:
+After starting the `nohup` command in background mode, ask the user how often they want progress reports:
 
 **"How often would you like to receive progress reports? (in seconds) [default: 60]"**
+
+> **Note (`SINGLE_POLICY_MODE=true`):** Since each policy runs as a separate `nohup ./run.sh` call, ask this question again after each individual run starts.
 
 Provide ONLY these clickable suggestions: 30, 60 (default), 90, custom input.
 
 Then repeat the following cycle:
 1. Sleep for the specified interval (use `sleep <seconds>` command - do not count manually)
-2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` or `crawler/log` (only for crawler execution) to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
+2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` (or `<LOG_DIR>` if `SINGLE_POLICY_MODE=true`) or `crawler/log` (only for crawler execution) to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
    - For `crawler/log`: `crawler_{timestamp}` files are the main execution logs, and `guide_{timestamp}` files are logs for generating next-step guidance for the user. When multiple `crawler_*` or `guide_*` logs exist, only report on the files with the most recent timestamp.
 3. Summarize the current activity based on what you read from the logs. Report only facts from the log content, avoid speculation or assumptions.
 4. Always include the total line count: `Log line count total: <sum of all log file line counts>`

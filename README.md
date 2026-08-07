@@ -100,21 +100,7 @@ cp .env.example .env
 
 Choose one of the following authentication providers:
 
-**Option A: LiteLLM (Default)**
-
-```bash
-AUTH_PROVIDER=litellm
-MODEL_BASE_URL=https://your-litellm-endpoint.com
-MODEL_NAME=aws/claude-sonnet-4-5
-MODEL_API_KEY=sk-your-litellm-api-key
-```
-
-- `AUTH_PROVIDER`: Set to `litellm`
-- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
-- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
-- `MODEL_API_KEY`: Your LiteLLM API key
-
-**Option B: GitHub Copilot**
+**Option A: GitHub Copilot (Default)**
 
 ```bash
 AUTH_PROVIDER=github-copilot
@@ -133,6 +119,32 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
 
+**Option B: LiteLLM**
+
+```bash
+AUTH_PROVIDER=litellm
+MODEL_BASE_URL=https://your-litellm-endpoint.com
+MODEL_NAME=aws/claude-sonnet-5
+MODEL_API_KEY=sk-your-litellm-api-key
+```
+
+- `AUTH_PROVIDER`: Set to `litellm`
+- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
+- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-5`)
+- `MODEL_API_KEY`: Your LiteLLM API key
+
+**Option C: Amazon Bedrock (Bearer Token)**
+
+```bash
+AUTH_PROVIDER=amazon-bedrock
+MODEL_NAME=anthropic.claude-sonnet-5
+MODEL_API_KEY=your-base64-encoded-bearer-token
+```
+
+- `AUTH_PROVIDER`: Set to `amazon-bedrock`
+- `MODEL_NAME`: Bedrock model ID (e.g., `anthropic.claude-sonnet-5`)
+- `MODEL_API_KEY`: Your Bedrock Bearer Token (Base64 encoded API key)
+
 **How to get GitHub Copilot tokens:**
 
 **Recommended: Using Docker container (no local installation required)**
@@ -141,7 +153,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1.full.0.0.1 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -171,7 +183,7 @@ Note: This requires OpenCode to be installed on your system. The container metho
 # Authentication (choose one option above)
 AUTH_PROVIDER=litellm
 MODEL_BASE_URL=https://your-litellm-endpoint.com
-MODEL_NAME=aws/claude-sonnet-4-5
+MODEL_NAME=aws/claude-sonnet-5
 MODEL_API_KEY=sk-your-litellm-api-key
 
 # Binaries (required - must match container architecture)

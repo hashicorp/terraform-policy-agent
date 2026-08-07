@@ -82,12 +82,26 @@ When `summary.json` is available, include a compact markdown table with these co
 
 If the workflow is Sentinel conversion (conversion_local or conversion_external) and possible, infer Sentinel correspondence from `source`, `policy_file_path`, related requirement files, or the original input context, and mention it in surrounding text. Do not add a Limitation column by default.
 
+**For `conversion_external` workflow:**
+After postprocess, the deployed files are under `EXTERNAL_REPO_DIR`. Use these paths when referencing generated artifacts:
+- `EXTERNAL_REPO_DIR/<sentinel_dir>/tfpolicy/<sentinel_basename>/<sentinel_basename>.policy.hcl`
+- `EXTERNAL_REPO_DIR/<sentinel_dir>/tfpolicy/<sentinel_basename>/<sentinel_basename>.policytest.hcl`
+- `EXTERNAL_REPO_DIR/<sentinel_dir>/tfpolicy/<sentinel_basename>/<sentinel_basename>.tf`
+- `EXTERNAL_REPO_DIR/<sentinel_dir>/tfpolicy/<sentinel_basename>/<sentinel_basename>.report.md`
+
+Use the deployed paths (not `DATA_DIR/output-<timestamp>/`) when citing file locations to the user.
+
 Example shape:
 
 ```md
 | Policy Name | Source | Status | Total test cases | Passed | Failed |
 |-------------|--------|--------|------------------|--------|--------|
 | CloudFront_Associated_WAF | AWS Security Hub (CloudFront.6) | ✅ Success | 5 | 5 | 0 |
+```
+
+File reference example (`conversion_external`):
+```
+EXTERNAL_REPO_DIR/path/to/tfpolicy/cloudfront_associated_waf/cloudfront_associated_waf.policy.hcl
 ```
 
 ## Rules
