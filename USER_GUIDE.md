@@ -573,6 +573,6 @@ If you encounter issues not covered here:
 
 ---
 
-**Document Version:** 2.0
-**Applies to IMAGE_VERSION:** 0.0.30-rc1-uxfix
-**Last Updated:** July 2026
+**Document Version:** 2.0  
+**Applies to IMAGE_VERSION:** 0.0.30-rc1-uxfix  
+**Last Updated:** July 2026  
