@@ -29,7 +29,7 @@ Pull the pre-built Docker image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.29.full.0.0.1
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1.full.0.0.1
 ```
 
 **Required Binaries**:
@@ -78,7 +78,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/polaris-20251120/terraform-pac-agent:0.0.29.full.0.0.1 \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1.full.0.0.1 \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -141,7 +141,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/polaris-20251120/terraform-pac-agent:0.0.29.full.0.0.1 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1.full.0.0.1 \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -193,7 +193,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
-IMAGE_TAG=0.0.29.full.0.0.1
+IMAGE_TAG=0.0.30-rc1.full.0.0.1
 
 # Stage 0: Extraction timeout
 STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
