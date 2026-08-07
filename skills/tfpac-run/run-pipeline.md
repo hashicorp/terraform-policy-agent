@@ -175,7 +175,7 @@ python3 skills/tfpac-run/scripts/dotenv_tool.py .env
 Verify no containers with that prefix are still running:
 
 ```bash
-{ACTUAL DOCKER_CLI} ps | grep {ACTUAL CONTAINER_PREFIX}
+{DOCKER_CLI} ps | grep {CONTAINER_PREFIX}
 ```
 
 If either variable is not set, use its default (`DOCKER_CLI=docker`, `CONTAINER_PREFIX=terraform-pac-agent-skills`):
@@ -190,7 +190,7 @@ If any containers are still running:
 2. **Ask for permission**: Request explicit user confirmation before proceeding with cleanup, showing the command using ./stop.sh prefix_name (e.g., "May I execute the following cleanup command to remove these unnecessary containers? command: {ACTUAL COMMAND HERE}").
 3. **Stop remaining containers**: Once approved, execute the stop command.
 
-**NOTE: Retry processes may start after stopping.** After executing the stop command, wait a few seconds and re-check with `{ACTUAL DOCKER_CLI} ps | grep {CONTAINER_PREFIX}` to ensure no retry containers have started. If any containers are still running, repeat the stop command until all containers are confirmed stopped.
+**NOTE: Retry processes may start after stopping.** After executing the stop command, wait a few seconds and re-check with `{DOCKER_CLI} ps | grep {CONTAINER_PREFIX}` to ensure no retry containers have started. If any containers are still running, repeat the stop command until all containers are confirmed stopped.
 
 4. **Ask next action**: After cleanup, ask the user whether to retry the command or end the process.
    - If the user chooses to retry, first check `DATA_DIR/OUTPUT_DIR` again with `ls -la DATA_DIR/OUTPUT_DIR`, and if the directory contains files, ask how to handle them (keep, backup, or cleanup) before retrying the pipeline command.
