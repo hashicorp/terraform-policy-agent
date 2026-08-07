@@ -316,7 +316,7 @@ def check_api_credentials(env: dict) -> dict:
 
 
 # Characters that break shell scripts and Docker volume mounts
-_PATH_UNSAFE_CHARS = r""" \t()[]{},'";!#$&*?<>|~`"""
+_PATH_UNSAFE_CHARS = " \t()[]{},'\"!;#$&*?<>|~`"
 
 
 def check_working_directory_path(cwd: Path) -> bool:
@@ -970,7 +970,8 @@ def main() -> int:
             result["ok"] = False
             result["errors"].append(
                 f"EXTERNAL_REPO_DIR is set ({external_repo_dir_val}); "
-                "remove it from .env to use local mode"
+                "remove it from .env to use local mode "
+                "(using external mode? ignore this)"
             )
 
         # In local mode, INPUT_DIR / INPUT_FILE / OUTPUT_DIR must be set
@@ -1002,7 +1003,7 @@ def main() -> int:
             result["checks"]["external_repo_dir"] = external_repo_dir_val
         if not ext_set:
             result["ok"] = False
-            result["errors"].append("EXTERNAL_REPO_DIR is not set in .env")
+            result["errors"].append("EXTERNAL_REPO_DIR is not set in .env (using local mode? ignore this)")
         elif not ext_exists:
             result["ok"] = False
             result["errors"].append(f"EXTERNAL_REPO_DIR directory not found: {external_repo_dir_val}")
