@@ -423,13 +423,13 @@ Type `/skills` in your coding agent to view available skills.
 
 Choose `tfpac-run` from the list of available skills to start the policy conversion process.
 
-> **NOTE:** You can target a specific policy instead of converting all policies at once by passing a natural language identifier (such as a policy name or ID) with the `--policy` flag: `/tfpac-run --policy <identifier>`. This is useful for reducing compute cost when testing a single policy.
-
 ### Step 24: Confirm tfpac-run execution
 
 ![Confirm tfpac-run](photo/run/(3):tfpac-run.png)
 
 Press Enter in this state to execute the skill.
+
+> **NOTE:** You can target a specific policy instead of converting all policies at once by passing a natural language identifier (such as a policy name or ID) with the `--policy` flag: `/tfpac-run --policy <identifier>`. This is useful for reducing compute cost when testing a single policy.
 
 ### Step 25: Choose data source location
 
