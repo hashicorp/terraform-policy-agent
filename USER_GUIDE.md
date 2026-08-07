@@ -173,7 +173,7 @@ docker run -d \
 ```bash
 docker run --rm -it --entrypoint "" \
   --add-host=host.docker.internal:host-gateway \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix \
   curl http://host.docker.internal:8500/health
 ```
 
@@ -389,7 +389,7 @@ Review the setup completion report showing configuration summary and next steps.
 
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix \
     sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
   ```
 

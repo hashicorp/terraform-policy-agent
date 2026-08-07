@@ -40,7 +40,7 @@ Pull the pre-built Docker image from the registry. An IBM Cloud Container Regist
 # Password: enter your IBM Cloud Container Registry API key
 docker login icr.io -u iamapikey
 # Nothing will appear as you type — this is normal security behaviour. Do not paste twice.
-docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix
 ```
 
 **Required Binaries**:
@@ -89,7 +89,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -164,7 +164,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1-uxfix \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -215,7 +215,7 @@ OUTPUT_DIR=output
 
 # Execution
 MAX_WORKERS=5
-IMAGE_NAME=icr.io/terraform-policy-agent-2026/terraform-pac-agent
+IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
 IMAGE_TAG=0.0.30-rc1-uxfix
 
 # Stage 0: Extraction timeout
