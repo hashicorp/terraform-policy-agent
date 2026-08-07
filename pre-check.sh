@@ -33,6 +33,17 @@ else
     exit 1
 fi
 
+# Check Python version is >= 3.10
+PYTHON_MINOR=$("$PYTHON_CMD" -c "import sys; print(sys.version_info.minor)")
+PYTHON_MAJOR=$("$PYTHON_CMD" -c "import sys; print(sys.version_info.major)")
+PYTHON_FULL=$("$PYTHON_CMD" --version 2>&1 | awk '{print $2}')
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]; }; then
+    echo "Error: Python 3.10 or higher is required, but found Python ${PYTHON_FULL}" >&2
+    echo "" >&2
+    echo "Please update Python:" >&2
+    exit 1
+fi
+
 # Execute pre_check.py with all arguments
 exec "$PYTHON_CMD" "$PRE_CHECK_PY" "$@"
 
