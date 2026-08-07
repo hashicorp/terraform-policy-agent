@@ -15,17 +15,33 @@ sample-data/        run_pipeline.py     skills/
 
 ### 2. Prerequisites
 
-The agent runs in a container, so you'll need `docker` available on your system.
+The agent runs in a container, so you'll need either `docker` or `podman` available on
+your system.
 
-**Docker Image**:
+**Container CLI**:
 
-Pull the pre-built Docker image from the registry:
+`docker` is used by default. To use Podman, set this in your `.env` (see
+[Container CLI](#container-cli) below):
+
+```bash
+DOCKER_CLI=podman
+```
+
+That single setting is all that is required — `run.sh`, `stop.sh`, `pre-check.sh` and the
+build scripts all read it. **You do not need to alias `docker` to `podman`.**
+
+In the commands throughout this guide, replace `docker` with `podman` if that is what you
+configured.
+
+**Container Image**:
+
+Pull the pre-built container image from the registry:
 
 ```bash
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
-docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29
+docker pull icr.io/polaris-20251120/terraform-pac-agent:0.0.30-opa
 ```
 
 **Required Binaries**:
@@ -49,8 +65,8 @@ Download the following **Linux** binaries (used inside the container). The archi
   Pull and run the MCP server:
   
   ```bash
-  # Pull the Docker image
-  docker pull docker.io/hashicorp/terraform-mcp-server:0.3.3
+  # Pull the MCP server image
+  docker pull docker.io/hashicorp/terraform-mcp-server:1.1.0
   
   # Run the MCP server
   docker run -d \
@@ -60,7 +76,7 @@ Download the following **Linux** binaries (used inside the container). The archi
     -e TRANSPORT_HOST=0.0.0.0 \
     -e MCP_SESSION_MODE=stateless \
     --restart unless-stopped \
-    docker.io/hashicorp/terraform-mcp-server:0.3.3
+    docker.io/hashicorp/terraform-mcp-server:1.1.0
   ```
   
   **Verify connectivity:**
@@ -74,7 +90,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+    icr.io/polaris-20251120/terraform-pac-agent:0.0.30-opa \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -143,13 +159,13 @@ MODEL_API_KEY=your-base64-encoded-bearer-token
 
 **How to get GitHub Copilot tokens:**
 
-**Recommended: Using Docker container (no local installation required)**
+**Recommended: Using a container (no local installation required)**
 
 Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+  icr.io/polaris-20251120/terraform-pac-agent:0.0.30-opa \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -173,6 +189,40 @@ cat ~/.local/share/opencode/auth.json
 
 Note: This requires OpenCode to be installed on your system. The container method is recommended as it keeps your system clean and isolated.
 
+#### Container CLI
+
+```bash
+# docker (default) or podman
+DOCKER_CLI=docker
+```
+
+Priority: this `.env` file > environment variable > default (`docker`).
+
+Podman users only need this one line; no `docker` alias is required.
+
+**Podman on Linux**
+
+Two host-specific flags may be needed. Pass them through with
+`DOCKER_RUN_EXTRA_ARGS`, which is appended verbatim to the container run command:
+
+| Host | Value |
+|---|---|
+| macOS (Podman Desktop / `podman machine`) | leave unset |
+| SELinux-enforcing Linux (RHEL / Fedora / CentOS Stream) | `DOCKER_RUN_EXTRA_ARGS="--security-opt label=disable"` |
+| Rootless Podman on Linux | `DOCKER_RUN_EXTRA_ARGS=--add-host=host.docker.internal:host-gateway` |
+| Both of the above | `DOCKER_RUN_EXTRA_ARGS="--security-opt label=disable --add-host=host.docker.internal:host-gateway"` |
+
+- **Wrap the value in double quotes whenever it contains a space.** Without quotes the shell
+  reads only the first word and the rest is silently dropped.
+- `--security-opt label=disable` is preferred over adding `,z` to the mounts: `,z` relabels
+  the files on the host, which would change the SELinux labels of shared binaries such as
+  `/usr/local/bin/terraform`.
+- **Do not set `--add-host` on macOS.** The `podman machine` VM already defines
+  `host.docker.internal`, and Podman fails with
+  `unable to replace "host-gateway" of host entry "host.docker.internal"`.
+- On macOS, only paths shared into the `podman machine` VM can be mounted. `/tmp` is not
+  shared by default, so keep `DATA_DIR` and the binary paths under your home directory.
+
 #### Complete `.env` Example
 
 ```bash
@@ -189,7 +239,7 @@ TERRAFORM_BINARY_PATH=/path/to/terraform
 TFPOLICY_BINARY_PATH=/path/to/tfpolicy
 
 # External Repository Path (Primary use case)
-# Set this to convert Sentinel policies from an external repository
+# Set this to convert Sentinel or OPA/Rego policies from an external repository
 EXTERNAL_REPO_DIR=/path/to/your/sentinel-repository
 
 # Data directories (used when EXTERNAL_REPO_DIR is not set)
@@ -200,8 +250,14 @@ OUTPUT_DIR=output
 
 # Execution
 MAX_WORKERS=5
-IMAGE_NAME=icr.io/terraform-policy-agent-2026/terraform-pac-agent
-IMAGE_TAG=0.0.29
+IMAGE_NAME=icr.io/polaris-20251120/terraform-pac-agent
+IMAGE_TAG=0.0.30-opa
+
+# Container CLI: docker (default) or podman
+DOCKER_CLI=docker
+# Extra flags for the container run command (see "Container CLI" above).
+# Quote the value if it contains a space.
+# DOCKER_RUN_EXTRA_ARGS="--security-opt label=disable"
 
 # Stage 0: Extraction timeout
 STAGE0_TIMEOUT=600  # Optional, defaults to 600 (10 minutes)
@@ -228,7 +284,9 @@ Before running the pipeline, verify all prerequisites are met:
 ./pre-check.sh
 
 # Or check specific components
-./pre-check.sh docker    # Docker daemon only
+# ("docker" here is the name of the container-engine check, not the CLI:
+#  keep it as "docker" even when DOCKER_CLI=podman)
+./pre-check.sh docker    # Container engine only
 ./pre-check.sh mcp       # MCP server only
 ./pre-check.sh binaries  # terraform/tfpolicy binaries only
 ./pre-check.sh env       # Environment variables only
@@ -241,18 +299,18 @@ Before running the pipeline, verify all prerequisites are met:
 Note: `pre-check.sh` automatically detects and uses the available Python interpreter (`python3` or `python`).
 
 The pre-flight check will verify:
-- 🟢 **docker**: Docker daemon is running
+- 🟢 **docker**: The container engine set by `DOCKER_CLI` is running
 - 🟢 **env**: Environment variables are properly configured
 - 🟢 **binaries**: terraform and tfpolicy binaries are available and executable
 - 🟢 **input**: Input files exist
-- 🟢 **image**: Docker image is available
+- 🟢 **image**: Container image is available
 - 🟢 **mcp**: MCP server is accessible at localhost:8500
 
 If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
 
 ### Primary Use Case: External Repository Integration
 
-To convert Sentinel libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
+To convert Sentinel or OPA/Rego libraries from an external repository (e.g., HashiCorp's CIS Policy Set for AWS Terraform):
 
 Example repository: https://github.com/hashicorp/policy-library-CIS-Policy-Set-for-AWS-Terraform/tree/main/policies/cloudtrail
 
@@ -286,7 +344,8 @@ Or explicitly specify external mode:
 
 The script automatically:
 - Detects `EXTERNAL_REPO_DIR` is set and runs in external mode
-- Extracts Sentinel files from the repository
+- Extracts Sentinel and OPA/Rego files from the repository, and for each `.rego`
+  writes a `<stem>.source_semantics.md` alongside it (see "OPA/Rego input" below)
 - Creates timestamped directories (`data/input-YYYYMMDD_HHMMSS/`, `data/output-YYYYMMDD_HHMMSS/`)
 - Generates policies
 - Deploys results to `EXTERNAL_REPO_DIR/tfpolicy/`
@@ -324,7 +383,7 @@ mkdir -p data/input
 
 **Step 2: Create Input File**
 
-Create `data/input/policy_goal.txt` with your Sentinel policy:
+Create `data/input/policy_goal.txt` with your source policy:
 
 **Option A: Inline Sentinel Code**
 ````
@@ -349,6 +408,13 @@ main = rule {
 Generate TF Policy for
 ./data/input/sentinels/policy1.sentinel
 ./data/input/sentinels/policy2.sentinel
+```
+
+**Option C: OPA/Rego File Paths**
+```
+Generate TF Policy for
+./data/input/rego/policy1.rego
+./data/input/rego/policy2.rego
 ```
 
 **Step 3: Ensure EXTERNAL_REPO_DIR is NOT set in `.env`**
@@ -450,9 +516,10 @@ The skill will then guide the workflow in this order:
 1. **Input setup assistance**
    - Help create `.env` file from `.env.example`
    - Guide creation of `data/input/policy_goal.txt`
-   - Assist with placing Sentinel files in `data/input/sentinels/` if needed
+   - Assist with placing Sentinel files in `data/input/sentinels/`, or OPA/Rego files
+     in `data/input/rego/`, if needed
 2. **Prerequisite check**
-   - Verify Docker image availability
+   - Verify container image availability
    - Check required binaries (terraform, tfpolicy)
    - Validate MCP server connection
 3. **Pipeline run**

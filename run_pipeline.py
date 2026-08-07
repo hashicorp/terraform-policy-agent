@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright IBM Corp. 2026
+
 """
 Terraform Policy Automation Agent Skills - Pipeline Execution Script
 
@@ -99,6 +101,10 @@ class PipelineExecutor:
         
         # Container configuration
         self.container_prefix = os.getenv("CONTAINER_PREFIX", "terraform-pac-agent-skills")
+
+        # Container CLI (docker or podman). run.sh resolves this from .env and exports it,
+        # so os.getenv already reflects the .env value when invoked through run.sh.
+        self.docker_cli = os.getenv("DOCKER_CLI", "docker")
         
         # Track running containers for cleanup
         self.running_containers: Set[str] = set()
@@ -159,14 +165,14 @@ class PipelineExecutor:
             try:
                 # Try to stop the container
                 subprocess.run(
-                    ["docker", "stop", container_name],
+                    [self.docker_cli, "stop", container_name],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=5
                 )
                 # Try to remove the container
                 subprocess.run(
-                    ["docker", "rm", "-f", container_name],
+                    [self.docker_cli, "rm", "-f", container_name],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=5
@@ -292,13 +298,13 @@ class PipelineExecutor:
                 # Check timeout before reading
                 elapsed = time.time() - start_time
                 if elapsed > timeout_seconds:
-                    # Timeout exceeded - stop the Docker container
+                    # Timeout exceeded - stop the container
                     print(f"\n⏱️  Timeout reached, stopping container: {container_name}")
-                    
-                    # Stop the Docker container
+
+                    # Stop the container
                     try:
                         subprocess.run(
-                            ["docker", "stop", container_name],
+                            [self.docker_cli, "stop", container_name],
                             timeout=5,
                             capture_output=True
                         )

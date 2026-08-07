@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright IBM Corp. 2026
+
 set -e
 
 # Parse command line arguments
@@ -166,7 +168,7 @@ fi
 # Phase 1: Preprocessing
 if [ "$RUN_PREPROCESS" = true ]; then
     echo "=========================================="
-    echo "Phase 1: Extract Sentinel files"
+    echo "Phase 1: Extract policy source files"
     echo "=========================================="
     echo ""
 
@@ -178,6 +180,17 @@ if [ "$RUN_PREPROCESS" = true ]; then
     TEMP_INPUT_DIR="${DATA_DIR_ABS}/${INPUT_DIR_NAME}"
     TEMP_OUTPUT_DIR="${DATA_DIR_ABS}/${OUTPUT_DIR_NAME}"
     SENTINELS_DIR="${TEMP_INPUT_DIR}/sentinels"
+    REGO_DIR="${TEMP_INPUT_DIR}/rego"
+    # auto (default) discovers both source languages; set to sentinel or rego to
+    # restrict discovery. A Sentinel-only user never has to set this.
+    SOURCE_LANGUAGE="${SOURCE_LANGUAGE:-auto}"
+    # Mock/test fixture staging. ENABLE_SENTINEL_MOCK_USE is the previous name and
+    # is still honoured so existing .env files keep working.
+    ENABLE_SOURCE_MOCK_USE="${ENABLE_SOURCE_MOCK_USE:-${ENABLE_SENTINEL_MOCK_USE:-true}}"
+    # Policy set definitions. SENTINEL_HCL_PATH is the previous name of
+    # POLICY_SET_FILE_SENTINEL and is still honoured.
+    SENTINEL_HCL_PATH="${POLICY_SET_FILE_SENTINEL:-${SENTINEL_HCL_PATH:-}}"
+    POLICY_SET_FILE_REGO="${POLICY_SET_FILE_REGO:-}"
     
     mkdir -p "$SENTINELS_DIR"
     mkdir -p "$TEMP_OUTPUT_DIR"
@@ -238,15 +251,119 @@ if [ "$RUN_PREPROCESS" = true ]; then
                 fi
             fi
         fi
-    done < <(find "$EXTERNAL_REPO_DIR" -type f -name "*.sentinel" -print0)
+    done < <(if [ "$SOURCE_LANGUAGE" = "auto" ] || [ "$SOURCE_LANGUAGE" = "sentinel" ]; then find "$EXTERNAL_REPO_DIR" -type f -name "*.sentinel" -print0; fi)
 
-    if [ $SENTINEL_COUNT -eq 0 ]; then
+    # Copy .rego files from external repo (same rules as above, OPA conventions)
+    REGO_COUNT=0
+    REGO_SKIPPED_COUNT=0
+    REGO_TEST_COUNT=0
+
+    if [ "$SOURCE_LANGUAGE" = "auto" ] || [ "$SOURCE_LANGUAGE" = "rego" ]; then
+        while IFS= read -r -d '' rego_file; do
+            rego_dir=$(dirname "$rego_file")
+            rego_basename=$(basename "$rego_file" .rego)
+
+            # Skip OPA test files and fixture trees, they are not policies
+            case "$rego_file" in
+                *_test.rego|*/test/*|*/testdata/*)
+                    echo "⊘ Skipped: $rego_file (OPA test file or fixture directory)"
+                    REGO_TEST_COUNT=$((REGO_TEST_COUNT + 1))
+                    continue
+                    ;;
+            esac
+
+            # Skip if policy already exists
+            tfpolicy_dir="$rego_dir/tfpolicy/$rego_basename"
+            policy_file="$tfpolicy_dir/$rego_basename.policy.hcl"
+
+            if [ -f "$policy_file" ]; then
+                echo "⊘ Skipped: $rego_file (policy already exists)"
+                REGO_SKIPPED_COUNT=$((REGO_SKIPPED_COUNT + 1))
+                continue
+            fi
+
+            # A stem that also exists as Sentinel would deploy to the same
+            # tfpolicy/<stem>/ directory. Stop instead of overwriting silently.
+            if [ -f "$rego_dir/$rego_basename.sentinel" ]; then
+                echo ""
+                echo "ERROR: '$rego_basename' exists as both .sentinel and .rego in $rego_dir"
+                echo "       Both would be deployed to tfpolicy/$rego_basename/."
+                echo "       Set SOURCE_LANGUAGE=sentinel or SOURCE_LANGUAGE=rego to pick one,"
+                echo "       or rename one of the inputs."
+                exit 1
+            fi
+
+            # Copy to rego directory, preserving relative path
+            relative_path="${rego_file#$EXTERNAL_REPO_DIR/}"
+            target_file="$REGO_DIR/$relative_path"
+            target_dir=$(dirname "$target_file")
+
+            mkdir -p "$target_dir"
+            cp "$rego_file" "$target_file"
+            REGO_COUNT=$((REGO_COUNT + 1))
+            echo "✓ Copied: $relative_path"
+
+            # Stage test fixtures. Both the OPA convention (<stem>_test.rego, test/,
+            # testdata/, plan JSON) and this pipeline's Sentinel convention
+            # (test/<stem>/) are accepted, so either layout works.
+            if [ "$ENABLE_SOURCE_MOCK_USE" = "true" ]; then
+                sibling_test="$rego_dir/${rego_basename}_test.rego"
+                if [ -f "$sibling_test" ]; then
+                    cp "$sibling_test" "$target_dir/"
+                    echo "  ✓ Copied test fixture: ${rego_basename}_test.rego"
+                fi
+                for fixture in data.json data.yaml input.json; do
+                    if [ -f "$rego_dir/$fixture" ]; then
+                        cp "$rego_dir/$fixture" "$target_dir/"
+                        echo "  ✓ Copied fixture: $fixture"
+                    fi
+                done
+                for sub in "test/$rego_basename" testdata test; do
+                    mock_dir="$rego_dir/$sub"
+                    if [ -d "$mock_dir" ]; then
+                        relative_mock_path="${mock_dir#$EXTERNAL_REPO_DIR/}"
+                        target_mock_dir="$REGO_DIR/$relative_mock_path"
+                        mkdir -p "$target_mock_dir"
+                        cp -r "$mock_dir"/* "$target_mock_dir/" 2>/dev/null || true
+                        if [ "$(ls -A "$target_mock_dir" 2>/dev/null)" ]; then
+                            echo "  ✓ Copied fixtures: $relative_mock_path"
+                        fi
+                        break
+                    fi
+                done
+            fi
+        done < <(find "$EXTERNAL_REPO_DIR" -type f -name "*.rego" -print0)
+
+        if [ $REGO_COUNT -gt 0 ]; then
+            echo ""
+            echo "✓ Copied $REGO_COUNT Rego files"
+            if [ $REGO_SKIPPED_COUNT -gt 0 ]; then
+                echo "  Skipped $REGO_SKIPPED_COUNT files (already have policy.hcl)"
+            fi
+            if [ $REGO_TEST_COUNT -gt 0 ]; then
+                echo "  Skipped $REGO_TEST_COUNT OPA test files"
+            fi
+
+            # Read the load-bearing semantics of each policy deterministically.
+            # Stage 1 embeds the result into requirement.txt as authoritative facts.
+            echo ""
+            echo "Extracting source semantics..."
+            if python3 "${SCRIPT_DIR}/rego_semantics.py" "$REGO_DIR"; then
+                echo "✓ Source semantics written"
+            else
+                echo "ERROR: failed to extract source semantics" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    if [ $((SENTINEL_COUNT + REGO_COUNT)) -eq 0 ]; then
         echo ""
-        echo "No new Sentinel files to process."
-        echo "  Total files found: $((SENTINEL_COUNT + SKIPPED_COUNT + MOCK_COUNT))"
-        echo "  Mock files (in test/): $MOCK_COUNT"
-        echo "  Already have policy.hcl: $SKIPPED_COUNT"
-        echo "  New files to process: $SENTINEL_COUNT"
+        echo "No new policy files to process."
+        echo "  Total files found: $((SENTINEL_COUNT + SKIPPED_COUNT + MOCK_COUNT + REGO_COUNT + REGO_SKIPPED_COUNT + REGO_TEST_COUNT))"
+        echo "  Test/mock files: $((MOCK_COUNT + REGO_TEST_COUNT))"
+        echo "  Already have policy.hcl: $((SKIPPED_COUNT + REGO_SKIPPED_COUNT))"
+        echo "  New files to process: $((SENTINEL_COUNT + REGO_COUNT))"
         rm -rf "$TEMP_INPUT_DIR" "$TEMP_OUTPUT_DIR"
         exit 0
     fi
@@ -268,6 +385,23 @@ if [ "$RUN_PREPROCESS" = true ]; then
         sed -i.bak 's|source = "[^"]*\/\([^/"]*\.sentinel\)"|source = "\1"|g' "$SENTINELS_DIR/sentinel.hcl"
         rm -f "$SENTINELS_DIR/sentinel.hcl.bak"
         echo "✓ Copied and processed sentinel.hcl"
+    fi
+
+    # Copy the OPA policy set definition if defined. Unlike sentinel.hcl it has no
+    # `source` attribute - each block names a rule through `query`, so nothing in
+    # it depends on file paths and no rewriting is needed.
+    if [ -z "$POLICY_SET_FILE_REGO" ]; then
+        for candidate in "$EXTERNAL_REPO_DIR/policies.hcl" "$EXTERNAL_REPO_DIR/policies.json"; do
+            if [ -f "$candidate" ]; then
+                POLICY_SET_FILE_REGO="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -n "$POLICY_SET_FILE_REGO" ] && [ -f "$POLICY_SET_FILE_REGO" ] && [ $REGO_COUNT -gt 0 ]; then
+        mkdir -p "$REGO_DIR"
+        cp "$POLICY_SET_FILE_REGO" "$REGO_DIR/$(basename "$POLICY_SET_FILE_REGO")"
+        echo "✓ Copied $(basename "$POLICY_SET_FILE_REGO")"
     fi
 
     # Generate policy_goal.txt in INPUT_DIR
@@ -306,12 +440,73 @@ if [ "$RUN_PREPROCESS" = true ]; then
         fi
     done < <(find "$SENTINELS_DIR" -type f -name "*.sentinel" -print0 | sort -z)
 
-    # Add sentinel.hcl reference if exists
+    # Add all rego files with path relative to DATA_DIR. Test files and fixture
+    # trees are excluded here for the same reason they are excluded above.
+    if [ $REGO_COUNT -gt 0 ]; then
+        while IFS= read -r -d '' rego_file; do
+            case "$rego_file" in
+                *_test.rego|*/test/*|*/testdata/*) continue ;;
+            esac
+
+            relative_path="${rego_file#$REGO_DIR/}"
+            rego_line="./data/${INPUT_DIR_NAME}/rego/$relative_path"
+
+            if [ "$ENABLE_SOURCE_MOCK_USE" = "true" ]; then
+                rego_basename=$(basename "$rego_file" .rego)
+                rego_parent=$(dirname "$rego_file")
+                mock_refs=""
+
+                if [ -f "$rego_parent/${rego_basename}_test.rego" ]; then
+                    mock_refs="./data/${INPUT_DIR_NAME}/rego/$(dirname "$relative_path")/${rego_basename}_test.rego"
+                fi
+                for sub in "test/$rego_basename" testdata test; do
+                    if [ -d "$rego_parent/$sub" ] && [ "$(ls -A "$rego_parent/$sub" 2>/dev/null)" ]; then
+                        mock_dir_ref="./data/${INPUT_DIR_NAME}/rego/$(dirname "$relative_path")/$sub"
+                        if [ -n "$mock_refs" ]; then
+                            mock_refs="$mock_refs, $mock_dir_ref"
+                        else
+                            mock_refs="$mock_dir_ref"
+                        fi
+                        break
+                    fi
+                done
+                for fixture in input.json data.json data.yaml; do
+                    if [ -f "$rego_parent/$fixture" ]; then
+                        fixture_ref="./data/${INPUT_DIR_NAME}/rego/$(dirname "$relative_path")/$fixture"
+                        if [ -n "$mock_refs" ]; then
+                            mock_refs="$mock_refs, $fixture_ref"
+                        else
+                            mock_refs="$fixture_ref"
+                        fi
+                    fi
+                done
+
+                if [ -n "$mock_refs" ]; then
+                    echo "- ${rego_line}, Mock Files: ${mock_refs}" >> "$POLICY_GOAL_FILE"
+                else
+                    echo "- ${rego_line}" >> "$POLICY_GOAL_FILE"
+                fi
+            else
+                echo "- ${rego_line}" >> "$POLICY_GOAL_FILE"
+            fi
+        done < <(find "$REGO_DIR" -type f -name "*.rego" -print0 | sort -z)
+    fi
+
+    # Add policy set definition references if they exist
     if [ -f "$SENTINELS_DIR/sentinel.hcl" ]; then
         echo "" >> "$POLICY_GOAL_FILE"
         echo "Enforcement level configuration file:" >> "$POLICY_GOAL_FILE"
         echo "./data/${INPUT_DIR_NAME}/sentinels/sentinel.hcl" >> "$POLICY_GOAL_FILE"
     fi
+
+    for policy_set in policies.hcl policies.json; do
+        if [ -f "$REGO_DIR/$policy_set" ]; then
+            echo "" >> "$POLICY_GOAL_FILE"
+            echo "Enforcement level configuration file:" >> "$POLICY_GOAL_FILE"
+            echo "./data/${INPUT_DIR_NAME}/rego/$policy_set" >> "$POLICY_GOAL_FILE"
+            break
+        fi
+    done
 
     echo "✓ Generated $POLICY_GOAL_FILE"
     echo ""
@@ -457,11 +652,25 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 sentinel_path=""
                 sentinel_basename_from_dir=$(echo "$normalized_dir_name" | tr '-' '_')
                 
+                # Which source language this policy came from. Sentinel is looked
+                # up first, so a Sentinel-only repo resolves exactly as before.
+                source_lang=""
+
                 # First, try to identify the input sentinel directly from input/sentinels
                 if [ -d "${TEMP_INPUT_DIR}/sentinels" ]; then
                     matched_sentinel=$(find "${TEMP_INPUT_DIR}/sentinels" -type f \( -name "${normalized_dir_name}.sentinel" -o -name "${sentinel_basename_from_dir}.sentinel" \) | head -n 1)
                     if [ -n "$matched_sentinel" ]; then
                         sentinel_path="${matched_sentinel#${TEMP_INPUT_DIR}/sentinels/}"
+                        source_lang="sentinel"
+                    fi
+                fi
+
+                # Then try input/rego
+                if [ -z "$sentinel_path" ] && [ -d "${TEMP_INPUT_DIR}/rego" ]; then
+                    matched_rego=$(find "${TEMP_INPUT_DIR}/rego" -type f \( -name "${normalized_dir_name}.rego" -o -name "${sentinel_basename_from_dir}.rego" \) | head -n 1)
+                    if [ -n "$matched_rego" ]; then
+                        sentinel_path="${matched_rego#${TEMP_INPUT_DIR}/rego/}"
+                        source_lang="rego"
                     fi
                 fi
                 
@@ -469,12 +678,22 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 if [ -z "$sentinel_path" ]; then
                     [ ! -f "$report_file" ] && continue
                     sentinel_path=$(grep -o "sentinels/[^[:space:]]*\.sentinel" "$report_file" | head -n 1 | sed 's|sentinels/||')
-                    [ -z "$sentinel_path" ] && continue
+                    if [ -n "$sentinel_path" ]; then
+                        source_lang="sentinel"
+                    else
+                        sentinel_path=$(grep -o "rego/[^[:space:]]*\.rego" "$report_file" | head -n 1 | sed 's|rego/||')
+                        [ -z "$sentinel_path" ] && continue
+                        source_lang="rego"
+                    fi
                 fi
                 
                 # Determine target directory
                 sentinel_dir=$(dirname "$sentinel_path")
-                sentinel_basename=$(basename "$sentinel_path" .sentinel)
+                if [ "$source_lang" = "rego" ]; then
+                    sentinel_basename=$(basename "$sentinel_path" .rego)
+                else
+                    sentinel_basename=$(basename "$sentinel_path" .sentinel)
+                fi
                 
                 if [ "$sentinel_dir" = "." ]; then
                     target_dir="$EXTERNAL_REPO_DIR/tfpolicy/$sentinel_basename"
