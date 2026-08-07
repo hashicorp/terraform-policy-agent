@@ -60,15 +60,18 @@ Show the following message to the user:
 This wizard will guide you through the configuration of the Terraform Policy Agent project.
 
 Setup Overview:
-  1. Environment checks      — verify Docker, images, and system readiness
-  2. Select workflow         — choose local or external repository mode
-  3. Configure binary paths  — set up Terraform and TFPolicy binaries
-  4. Configure AI provider   — select GitHub Copilot, LiteLLM, or Amazon Bedrock
-  5. Configure pipeline      — set workers, timeouts, and output paths
-  6. Configure MCP           — verify MCP server connectivity
-  7. Review settings         — confirm all configuration values
-  8. Create .env             — generate the validated configuration file
-  9. Verify configuration    — run pre-flight checks to confirm readiness
+   1. Select workflow         — choose generation, generation_with_crawler, or conversion
+   2. Environment checks      — verify Docker, images, and MCP server readiness
+   3. Input setup             — configure policy goals, crawler sources, or Sentinel files
+   4. Configure binary paths  — set up Terraform and TFPolicy binaries
+   5. Configure AI provider   — select GitHub Copilot, LiteLLM, or Amazon Bedrock
+   6. Configure pipeline      — set workers and output paths
+   7. Docker configuration    — review image name and container settings
+   8. Timeout configuration   — set stage timeouts
+   9. Review settings         — confirm all configuration values
+  10. Preview .env             — generate and review the configuration file
+  11. Save .env               — write the validated configuration file
+  12. Verify configuration    — run pre-flight checks to confirm readiness
 
 When setup is complete, a validated `.env` configuration will be created and verified.
 You will then be ready to run the Terraform Policy Agent workflow.
@@ -145,16 +148,16 @@ docker --version
 **Step 2b: Docker Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1.full.0.0.1`
+- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1`
 - Default: Yes
 
 If **Yes** (use recommended version):
-- Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.30-rc1.full.0.0.1"
+- Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
+- Set `IMAGE_TAG`: "0.0.27.full.0.0.1"
 
 If **No** (custom version):
-- Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.30-rc1.full.0.0.1")
+- Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.27.full.0.0.1")
 
 **Check if image exists locally:**
 ```bash
@@ -712,7 +715,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command**
    ```bash
    docker run --rm -it --entrypoint "" \
-     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1.full.0.0.1 \
+     icr.io/polaris-20251120/terraform-pac-agent:0.0.27.full.0.0.1 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
