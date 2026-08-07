@@ -60,7 +60,7 @@ If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
 ```bash
-nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
+nohup ./run.sh local > /dev/null 2>&1 & echo $!
 ```
 
 ### For `generation_with_crawler` workflow:
@@ -96,7 +96,7 @@ If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
 ```bash
-nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
+nohup ./run.sh local > /dev/null 2>&1 & echo $!
 ```
 
 ### For `conversion_local` workflow:
@@ -111,7 +111,7 @@ If containers are found, include this warning in the confirmation message:
 #### Normal mode (no `--policy` flag):
 
 ```bash
-nohup ./run.sh --no-confirm local > /dev/null 2>&1 & echo $!
+nohup ./run.sh local > /dev/null 2>&1 & echo $!
 ```
 
 #### Single-policy mode (`SINGLE_POLICY_MODE=true`):
@@ -135,16 +135,16 @@ Compute `<LOG_DIR>` as: `DATA_DIR/log`.
 Execute each step in order, waiting for completion before proceeding:
 
 ```bash
-nohup ./run.sh --no-confirm local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
+nohup ./run.sh local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
 ```
 ```bash
-nohup ./run.sh --no-confirm local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
+nohup ./run.sh local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
 ```
 ```bash
-nohup ./run.sh --no-confirm local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
+nohup ./run.sh local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
 ```
 ```bash
-nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
+nohup ./run.sh local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
 ```
 
 ### For `conversion_external` workflow:
@@ -159,7 +159,7 @@ If containers are found, include this warning in the confirmation message:
 #### Normal mode (no `--policy` flag):
 
 ```bash
-nohup ./run.sh --no-confirm external > /dev/null 2>&1 & echo $!
+nohup ./run.sh external > /dev/null 2>&1 & echo $!
 ```
 
 This executes all 4 stages in sequence:
@@ -177,7 +177,7 @@ Execute in order:
 
 **Step 1 — preprocess**
 ```bash
-./run.sh --no-confirm external --phase preprocess
+./run.sh external --phase preprocess
 ```
 
 **Step 2 — resolve env vars (DATA_DIR / INPUT_DIR / OUTPUT_DIR)**
@@ -201,21 +201,21 @@ Resolve placeholders using the result of `set_env_for_external_mode.py`:
 
 **Step 4 — run pipeline steps (log files go under LOG_DIR)**
 ```bash
-nohup ./run.sh --no-confirm local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
+nohup ./run.sh local --step 0 > <LOG_DIR>/run.sh-step0.log 2>&1 & echo $!
 ```
 ```bash
-nohup ./run.sh --no-confirm local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
+nohup ./run.sh local --step 1 --goal-file <GOAL_FILE> > <LOG_DIR>/run.sh-step1.log 2>&1 & echo $!
 ```
 ```bash
-nohup ./run.sh --no-confirm local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
+nohup ./run.sh local --step 2 --policy-dir <POLICY_DIR> > <LOG_DIR>/run.sh-step2.log 2>&1 & echo $!
 ```
 ```bash
-nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
+nohup ./run.sh local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & echo $!
 ```
 
 **Step 5 — postprocess**
 ```bash
-./run.sh --no-confirm external --phase postprocess
+./run.sh external --phase postprocess
 ```
 
 
