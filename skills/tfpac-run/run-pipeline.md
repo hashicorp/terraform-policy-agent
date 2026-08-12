@@ -48,14 +48,17 @@ Do not delete or move existing user files without explicit confirmation.
 
 After that (or immediately for `conversion_external`), execute the appropriate command based on the selected workflow:
 
-**NOTE: Before executing any command, always ask the user for confirmation. When asking for permission, first run the applicable `docker ps` check below and include any warning in the same confirmation message. Wait for explicit approval (e.g., "yes" or "no") before running it. Do not execute commands without user consent.**
+**NOTE: Before executing any command, always ask the user for confirmation. When asking for permission, first run the applicable running-container check below and include any warning in the same confirmation message. Wait for explicit approval (e.g., "yes" or "no") before running it. Do not execute commands without user consent.**
 
 ### For `conversion_local` workflow:
 
 Before presenting the confirmation request, check:
 ```bash
-docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+set -a; [ -f .env ] && . ./.env; set +a
+"${DOCKER_CLI:-docker}" ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
 ```
+Sourcing `.env` here picks up both `DOCKER_CLI` (docker or podman) and `CONTAINER_PREFIX`. Never echo the sourced values: `.env` also holds credentials.
+
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
 
@@ -102,7 +105,8 @@ nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & e
 
 Before presenting the confirmation request, check:
 ```bash
-docker ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+set -a; [ -f .env ] && . ./.env; set +a
+"${DOCKER_CLI:-docker}" ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
 ```
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
@@ -248,7 +252,7 @@ Use `stop.sh` as a cleanup fallback when the original process is no longer easy 
 
 After stopping the pipeline (whether by user request or command interruption), always verify that no containers remain running.
 
-At first, check the value of `CONTAINER_PREFIX` value (target container prefix):
+At first, check the values of `CONTAINER_PREFIX` (target container prefix) and `DOCKER_CLI` (container CLI: `docker` or `podman`):
 
 ```bash
 python3 skills/tfpac-run/scripts/dotenv_tool.py .env
@@ -257,10 +261,10 @@ python3 skills/tfpac-run/scripts/dotenv_tool.py .env
 Verify no containers with that prefix are still running:
 
 ```bash
-docker ps | grep {ACTUAL CONTAINER_PREFIX}
+{DOCKER_CLI} ps | grep {ACTUAL CONTAINER_PREFIX}
 ```
 
-If `CONTAINER_PREFIX` is not set, use the default `terraform-pac-agent-skills`:
+If either variable is not set, use its default (`DOCKER_CLI=docker`, `CONTAINER_PREFIX=terraform-pac-agent-skills`):
 
 ```bash
 docker ps | grep terraform-pac-agent-skills
@@ -272,7 +276,7 @@ If any containers are still running:
 2. **Ask for permission**: Request explicit user confirmation before proceeding with cleanup, showing the command using ./stop.sh prefix_name (e.g., "May I execute the following cleanup command to remove these unnecessary containers? command: {ACTUAL COMMAND HERE}").
 3. **Stop remaining containers**: Once approved, execute the stop command.
 
-**NOTE: Retry processes may start after stopping.** After executing the stop command, wait a few seconds and re-check with `docker ps | grep {CONTAINER_PREFIX}` to ensure no retry containers have started. If any containers are still running, repeat the stop command until all containers are confirmed stopped.
+**NOTE: Retry processes may start after stopping.** After executing the stop command, wait a few seconds and re-check with `{DOCKER_CLI} ps | grep {CONTAINER_PREFIX}` to ensure no retry containers have started. If any containers are still running, repeat the stop command until all containers are confirmed stopped.
 
 4. **Ask next action**: After cleanup, ask the user whether to retry the command or end the process.
    - If the user chooses to retry, first check `DATA_DIR/OUTPUT_DIR` again with `ls -la DATA_DIR/OUTPUT_DIR`, and if the directory contains files, ask how to handle them (keep, backup, or cleanup) before retrying the pipeline command.

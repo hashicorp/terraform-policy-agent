@@ -4,11 +4,13 @@
 set -e
 
 # Cleanup function to stop container on exit
+# Note: ${DOCKER_CLI:-docker} is used instead of ${DOCKER_CLI}, because this trap
+# is registered before DOCKER_CLI is resolved and may run while it is still unset.
 cleanup() {
-    if [ -n "$CONTAINER_NAME" ] && docker ps -q -f name="^${CONTAINER_NAME}$" | grep -q .; then
+    if [ -n "$CONTAINER_NAME" ] && "${DOCKER_CLI:-docker}" ps -q -f name="^${CONTAINER_NAME}$" | grep -q .; then
         echo ""
         echo "Stopping container: ${CONTAINER_NAME}"
-        docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        "${DOCKER_CLI:-docker}" stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -100,6 +102,30 @@ fi
 [ -n "$PRESERVED_INPUT_FILE" ] && INPUT_FILE="$PRESERVED_INPUT_FILE"
 [ -n "$PRESERVED_LOCAL_SKILLS_DIR" ] && LOCAL_SKILLS_DIR="$PRESERVED_LOCAL_SKILLS_DIR"
 
+# Resolve the container CLI used to run the agent (docker or podman).
+# Priority: .env > environment variable > default (docker)
+#
+# This is resolved here as well as in run.sh, because this script can be invoked
+# directly and must not depend on run.sh having exported the value.
+#
+# DOCKER_CLI is deliberately NOT in the PRESERVED_* list above: a value set in
+# .env is meant to win over an exported environment variable, so that .env stays
+# the single place where the container CLI is configured.
+DOCKER_CLI="${DOCKER_CLI:-docker}"
+
+if ! command -v "${DOCKER_CLI}" >/dev/null 2>&1; then
+    echo "ERROR: Container CLI '${DOCKER_CLI}' not found in PATH"
+    echo ""
+    echo "Please choose one of the following options:"
+    echo "  1. Install ${DOCKER_CLI}, or start it if it is already installed"
+    echo "  2. Set DOCKER_CLI to an available CLI (docker or podman) in .env file"
+    exit 1
+fi
+
+# Export so that run_pipeline.py uses the same CLI for its container cleanup.
+export DOCKER_CLI
+export DOCKER_RUN_EXTRA_ARGS="${DOCKER_RUN_EXTRA_ARGS:-}"
+
 IMAGE_NAME="${IMAGE_NAME:-terraform-pac-agent-skills}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 # Use CONTAINER_PREFIX if CONTAINER_NAME is not set
@@ -107,16 +133,16 @@ CONTAINER_PREFIX="${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
 CONTAINER_NAME="${CONTAINER_NAME:-${CONTAINER_PREFIX}}"
 
 # Check if container with the same name is already running
-RUNNING_CONTAINERS=$(docker ps -q -f name="^${CONTAINER_NAME}$")
+RUNNING_CONTAINERS=$("${DOCKER_CLI}" ps -q -f name="^${CONTAINER_NAME}$")
 if [ -n "$RUNNING_CONTAINERS" ]; then
     echo "ERROR: Container with name '${CONTAINER_NAME}' is already running"
     echo ""
     echo "Please choose one of the following options:"
-    echo "  1. Stop the container: docker stop ${CONTAINER_NAME}"
+    echo "  1. Stop the container: ${DOCKER_CLI} stop ${CONTAINER_NAME}"
     echo "  2. Set a different CONTAINER_NAME or CONTAINER_PREFIX in .env file"
     echo ""
     echo "Currently running container:"
-    docker ps -f name="^${CONTAINER_NAME}$" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"
+    "${DOCKER_CLI}" ps -f name="^${CONTAINER_NAME}$" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"
     exit 1
 fi
 
@@ -205,7 +231,7 @@ show_usage() {
     echo "Note: INPUT_DIR and INPUT_FILE are read from .env (defaults: input/policy_goal.txt)"
     echo ""
     echo "Global options:"
-    echo "  --dryrun                      Print docker command without executing"
+    echo "  --dryrun                      Print container command without executing"
     echo "  --prompt \"<custom prompt>\"  Override default prompt"
 }
 
@@ -502,8 +528,8 @@ CRITICAL: You MUST strictly follow ALL instructions in the step4-validation-fixt
 esac
 
 # Check if image exists
-if ! docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" >/dev/null 2>&1; then
-    echo "ERROR: Docker image '${IMAGE_NAME}:${IMAGE_TAG}' not found"
+if ! "${DOCKER_CLI}" image inspect "${IMAGE_NAME}:${IMAGE_TAG}" >/dev/null 2>&1; then
+    echo "ERROR: Container image '${IMAGE_NAME}:${IMAGE_TAG}' not found"
     echo "Please run './docker/build.sh' first"
     exit 1
 fi
@@ -608,7 +634,7 @@ CONTAINER_OUTPUT_DIR="/workspace/data/${OUTPUT_DIR}"
 
 echo "=========================================="
 if [ "$DRYRUN" = true ]; then
-    echo "Dry-Run Mode: Docker Command"
+    echo "Dry-Run Mode: Container Command"
 else
     echo "Running Terraform PaC Agent Skill"
 fi
@@ -679,10 +705,17 @@ if [ -n "${LOCAL_SKILLS_DIR:-}" ]; then
     fi
 fi
 
-DOCKER_CMD="docker run --rm \\
+# Build DOCKER_RUN_EXTRA_ARGS fragment for dry-run display
+# Must stay in sync with the DOCKER_RUN_CMD construction below: if only one of the
+# two includes the extra args, the dry-run output no longer matches what is run.
+EXTRA_ARGS_DISPLAY=""
+if [ -n "${DOCKER_RUN_EXTRA_ARGS:-}" ]; then
+    EXTRA_ARGS_DISPLAY="  ${DOCKER_RUN_EXTRA_ARGS} \\\\\n"
+fi
+
+DOCKER_CMD="${DOCKER_CLI} run --rm \\
   --name \"${CONTAINER_NAME}\" \\
-  --add-host=host.docker.internal:host-gateway \\
-  -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\" \\
+${EXTRA_ARGS_DISPLAY}  -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\" \\
   -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\" \\
   -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\" \\
   -v \"${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}\" \\
@@ -693,7 +726,7 @@ DOCKER_CMD="docker run --rm \\
 if [ "$DRYRUN" = true ]; then
 
     # Print the command in dry-run mode
-    echo "Docker command that would be executed:"
+    echo "Container command that would be executed:"
     echo ""
     echo -e "$DOCKER_CMD"
     echo ""
@@ -709,8 +742,16 @@ fi
 # Output: read-write mount (host's OUTPUT_DIR -> container's OUTPUT_DIR with same name)
 # Binaries: read-only mount to /tmp/host-binaries/ (copied to /usr/local/bin by entrypoint.sh)
 
-# Build docker run command with environment variables
-DOCKER_RUN_CMD="docker run --rm --name \"${CONTAINER_NAME}\" --add-host=host.docker.internal:host-gateway"
+# Build container run command with environment variables
+DOCKER_RUN_CMD="${DOCKER_CLI} run --rm --name \"${CONTAINER_NAME}\""
+
+# Host-specific flags from .env (e.g. --security-opt label=disable on SELinux hosts).
+# Inserted unquoted on purpose: the string is word-split by the eval below, so a
+# multi-word value such as '--security-opt label=disable' is passed as two arguments.
+if [ -n "${DOCKER_RUN_EXTRA_ARGS:-}" ]; then
+    DOCKER_RUN_CMD="$DOCKER_RUN_CMD ${DOCKER_RUN_EXTRA_ARGS}"
+fi
+
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\""
@@ -768,7 +809,7 @@ esac
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD \"${IMAGE_NAME}:${IMAGE_TAG}\""
 DOCKER_RUN_CMD="$DOCKER_RUN_CMD sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
 
-# Execute the docker run command
+# Execute the container run command
 if eval $DOCKER_RUN_CMD; then
     exit_code=0
 else

@@ -95,40 +95,55 @@ Display: `[1/11] Pre-flight System Check`
 
 **Before configuring the environment, verify system readiness:**
 
-**Step 1a: Check Docker availability**
-Display to the user: "Now checking if Docker is available. No files or environment settings are changed."
-Then run:
-```bash
-docker --version
-```
+**Step 1a: Determine the container CLI (docker or podman)**
 
-**If Docker is not available:**
-- Show error: "Docker is not available. Please install Docker and ensure it's running."
-- Ask user to install/start Docker before proceeding
+The agent supports both Docker and Podman. The CLI is configured with `DOCKER_CLI` in `.env`
+and defaults to `docker`. Determine which one to use in this order:
 
-**Step 1b: Docker Image Configuration and Setup**
+1. **If `.env.tmp` already exists**, read it and check `DOCKER_CLI`.
+   If it is set, use that value and skip detection.
+2. **Otherwise, detect what is available:**
+   ```bash
+   docker --version 2>/dev/null; podman --version 2>/dev/null
+   ```
+3. **Decide based on the result:**
+   - Only one is available → use it without asking.
+   - Both are available → **Ask: "Which container CLI do you want to use?"** (options: `docker` (default), `podman`)
+   - Neither is available → Show error: "No container CLI found. Please install Docker or Podman and ensure it is running." and stop here.
 
-**Ask: "Do you want to use the latest recommended Docker image version?"**
-- Recommended image: `icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix`
+Store the result as `[DOCKER_CLI]` and use it for **every** container command in the rest of
+this workflow. It is written to `.env.tmp` in Step 1b along with the image configuration.
+
+**Note for Podman users:** No `docker` alias is needed. Setting `DOCKER_CLI=podman` in `.env` is
+sufficient — all agent scripts (`run.sh`, `stop.sh`, `pre-check.sh`) read it from there.
+
+**Step 1b: Container Image Configuration and Setup**
+
+**Ask: "Do you want to use the latest recommended container image version?"**
+- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1`
 - Default: Yes
 
 If **Yes** (use recommended version):
-- Set `IMAGE_NAME`: "icr.io/polaris-20251120/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.30-rc1-uxfix"
+- Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
+- Set `IMAGE_TAG`: "0.0.30-rc1"
 
 If **No** (custom version):
-- Ask for `IMAGE_NAME` (default: "icr.io/polaris-20251120/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.30-rc1-uxfix")
+- Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.30-rc1")
 
 **Check if image exists locally:**
 ```bash
-docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TAG]" || echo "Image not found locally"
+[DOCKER_CLI] images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TAG]" || echo "Image not found locally"
 ```
 
 **Important:** If the output shows "Image not found locally", the image does not exist. Do not proceed until the image is pulled.
 
+**Note for Podman:** Podman prefixes locally built images with `localhost/`, and pulled images with
+their full registry name. Matching on `[IMAGE_NAME]:[IMAGE_TAG]` with `grep` works in both cases
+because the registry-qualified name is used here.
+
 **If image does not exist locally:**
-- Show message: "📦 Docker image not found locally. You need to pull it first. The image is approximately 2 GB. So let me check your available disk space first."
+- Show message: "📦 Container image not found locally. You need to pull it first. The image is approximately 2 GB. So let me check your available disk space first."
 - Check available disk space and display the result to the user:
   ```bash
   df -h .
@@ -141,7 +156,7 @@ docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TA
   
   Before pulling the image, please login to IBM Cloud Container Registry in your terminal:
   
-  docker login icr.io -u iamapikey
+  [DOCKER_CLI] login icr.io -u iamapikey
   
   When prompted, enter your IBM Cloud API key.
   (If you don't have an API key, please contact your HashiCorp representative to obtain access.)
@@ -150,12 +165,12 @@ docker images --format "{{.Repository}}:{{.Tag}}" | grep "[IMAGE_NAME]:[IMAGE_TA
   ```
 - **IMPORTANT:** Do NOT suggest creating API keys or provide alternative authentication methods. Users must obtain API keys from their HashiCorp representative.
 - **Wait for user confirmation** that they have logged in successfully
-- After login confirmation, ask: "Ready to pull the Docker image (~2 GB). This will take several minutes on broadband. Continue? [Yes/No]"
+- After login confirmation, ask: "Ready to pull the container image (~2 GB). This will take several minutes on broadband. Continue? [Yes/No]"
   - If **No**: Stop and inform the user — "Pull skipped. Re-run setup when you are ready to pull the image."
   - If **Yes**: Display to the user: "Pulling the image now. You will see multiple download progress lines — this is normal. Please wait until it stops."
     Then run:
 ```bash
-docker pull [IMAGE_NAME]:[IMAGE_TAG]
+[DOCKER_CLI] pull [IMAGE_NAME]:[IMAGE_TAG]
 ```
 
 **If image pull fails:**
@@ -164,8 +179,8 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
   ```
   ❌ Pull failed. To retry manually, run:
 
-     docker login icr.io -u iamapikey
-     docker pull [IMAGE_NAME]:[IMAGE_TAG]
+     [DOCKER_CLI] login icr.io -u iamapikey
+     [DOCKER_CLI] pull [IMAGE_NAME]:[IMAGE_TAG]
 
   Once the pull succeeds, re-run tfpac-setup — it will resume from this step automatically via .env.tmp.
   ```
@@ -174,29 +189,29 @@ docker pull [IMAGE_NAME]:[IMAGE_TAG]
 **If image pull succeeds:**
 - Run and display the pulled digest to the user:
   ```bash
-  docker images --digests [IMAGE_NAME] | grep [IMAGE_TAG]
+  [DOCKER_CLI] images --digests [IMAGE_NAME] | grep [IMAGE_TAG]
   ```
 - Show: "✅ Pulled: [IMAGE_NAME]:[IMAGE_TAG] (digest confirmed above)"
 - Proceed to Step 1c
 
 **If image already exists:**
-- Show message: "✅ Docker image already available locally"
+- Show message: "✅ Container image already available locally"
 - Proceed to Step 1c
 
-**Note:** Image name and tag are stored immediately to `.env.tmp` to ensure consistency. They will be included in the final `.env` file generation in Step 9.
+**Note:** Image name, tag and container CLI are stored immediately to `.env.tmp` to ensure consistency. They will be included in the final `.env` file generation in Step 9.
 
 **Step 1c: Check MCP server (Only after image is confirmed available)**
 
 **Prerequisites for this step:**
-- Docker image must be pulled and available locally
-- `.env.tmp` must contain `IMAGE_NAME` and `IMAGE_TAG` (set in Step 1b)
+- Container image must be pulled and available locally
+- `.env.tmp` must contain `IMAGE_NAME`, `IMAGE_TAG` and `DOCKER_CLI` (set in Step 1b)
 
 **Run MCP check:**
 ```bash
 ./pre-check.sh --tmp mcp
 ```
 
-This check uses the Docker image specified in `.env.tmp` to verify MCP server connectivity.
+This check uses the container image and `DOCKER_CLI` specified in `.env.tmp` to verify MCP server connectivity.
 
 - 🟢 **mcp**: MCP server is accessible at localhost:8500 via container
 
@@ -206,14 +221,25 @@ This check uses the Docker image specified in `.env.tmp` to verify MCP server co
   ```
   ❌ MCP server is not reachable. Start it with:
 
-  docker run -d --name terraform-mcp-server \
+  [DOCKER_CLI] run -d --name terraform-mcp-server \
     -p 8500:8080 \
     -e TRANSPORT_MODE=streamable-http \
     -e TRANSPORT_HOST=0.0.0.0 \
     -e MCP_SESSION_MODE=stateless \
     hashicorp/terraform-mcp-server:1.1.0
 
-  Then re-run this check: ./pre-check.sh mcp
+  Then re-run this check: ./pre-check.sh --tmp mcp
+
+  If the check still fails after starting the MCP server, consider the following:
+
+  - MCP server not started or port 8500 not accessible
+  - The container cannot reach `host.docker.internal`
+    - Rootless Podman on Linux only: `host.docker.internal` is not resolvable by default.
+      Add to .env.tmp:  DOCKER_RUN_EXTRA_ARGS=--add-host=host.docker.internal:host-gateway
+      Do NOT set this on macOS (Podman Desktop) — the VM already defines the host entry
+      and Podman fails with `unable to replace "host-gateway"`.
+  - Podman on an SELinux-enforcing host (RHEL / Fedora / CentOS Stream): bind mounts are denied.
+    Add to .env.tmp:  DOCKER_RUN_EXTRA_ARGS="--security-opt label=disable"
   ```
 - Do not proceed until the MCP check passes 🟢
 
@@ -358,13 +384,15 @@ Store the resolved values as `_TF_DEFAULT` and `_TFP_DEFAULT`.
 
 **Step 3b-1: Detect image OS and architecture**
 
-Run the following command using `IMAGE_NAME` and `IMAGE_TAG` set in Step 1b:
+Run the following command using `DOCKER_CLI`, `IMAGE_NAME` and `IMAGE_TAG` set in Step 1a/1b:
 ```bash
-docker image inspect [IMAGE_NAME]:[IMAGE_TAG] --format "{{.Architecture}}|{{.Os}}"
+[DOCKER_CLI] image inspect [IMAGE_NAME]:[IMAGE_TAG] --format "{{.Architecture}}|{{.Os}}"
 ```
 Store the results as `IMAGE_ARCH` (e.g. `arm64`, `amd64`) and `IMAGE_OS` (e.g. `linux`, `darwin`).
 
 **Step 3b-2: Look up download URLs from the table below**
+
+The binaries are mounted into and executed **inside** the container, so they must match the **image's** OS and architecture — not the host machine.
 
 Use `IMAGE_OS`/`IMAGE_ARCH` to determine the correct download URLs for the binaries.
 
@@ -544,14 +572,14 @@ Ask: "Which authentication provider do you want to use?"
    
    To run this project, you need GitHub Copilot authentication tokens.
    
-   ### Recommended Method: Safe Token Acquisition Using Docker Container ✨
+   ### Recommended Method: Safe Token Acquisition Using a Container ✨
    
    No need to install anything on your host machine - everything is self-contained in the project's container.
    
-   **Step 1: Run the following command**
+   **Step 1: Run the following command** (replace `[DOCKER_CLI]` with the CLI chosen in Step 1a)
    ```bash
-   docker run --rm -it --entrypoint "" \
-     icr.io/polaris-20251120/terraform-pac-agent:0.0.30-rc1-uxfix \
+   [DOCKER_CLI] run --rm -it --entrypoint "" \
+     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -590,7 +618,7 @@ Ask: "Which authentication provider do you want to use?"
    
    ---
    
-   **💡 Why Use the Docker Container?**
+   **💡 Why Use the Container?**
    - No need to install additional software on your host machine
    - Completely isolated from your project environment
    - Used only for obtaining credentials, then immediately removed (`--rm` flag)
@@ -634,19 +662,32 @@ If yes, ask for:
 - **INPUT_FILE** (default: "policy_goal.txt", note: "Relative to DATA_DIR/INPUT_DIR/")
 - **MAX_WORKERS** (default: "5", validation: Must be a positive integer)
 
-### 6. Docker Configuration (Optional)
-Display: `[6/11] Docker Configuration`
+### 6. Container Configuration (Optional)
+Display: `[6/11] Container Configuration`
 Ask the user to choose: **"Would you like to proceed or go back?"** — present exactly these two options in this order:
 1. **Proceed** — continue to this step
 2. **Back** — return to Step 5
 (If user chooses Back: restart from Step 5.)
 
-Ask: "Do you want to customize additional Docker settings?" (default: No, note: "Image name and tag were already configured in step 1b")
+Ask: "Do you want to customize additional container settings?" (default: No, note: "Image name, tag and container CLI were already configured in step 1a/1b")
 
 If yes, ask for:
 - **IMAGE_NAME** (default: value from step 1b, note: "Already configured")
 - **IMAGE_TAG** (default: value from step 1b, note: "Already configured")
+- **DOCKER_CLI** (default: value from step 1a, note: "Already configured. docker or podman")
 - **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
+- **DOCKER_RUN_EXTRA_ARGS** (default: empty, note: "Host-specific flags appended to the container run command. Only needed for Podman on SELinux-enforcing hosts or rootless Podman on Linux — see below")
+
+**DOCKER_RUN_EXTRA_ARGS guidance** (only offer this when `DOCKER_CLI` is `podman`):
+
+| Host | Value |
+|------|-------|
+| macOS (Podman Desktop) | leave empty |
+| Linux, SELinux enforcing | `"--security-opt label=disable"` |
+| Linux, rootless, `host.docker.internal` unreachable | `--add-host=host.docker.internal:host-gateway` |
+| Linux, both of the above | `"--security-opt label=disable --add-host=host.docker.internal:host-gateway"` |
+
+**Important:** Wrap the value in double quotes whenever it contains a space, otherwise the shell reads only the first word.
 
 ### 7. Timeout Configuration (Optional)
 Display: `[7/11] Timeout Configuration`
@@ -737,7 +778,13 @@ Based on the contents of `.env.tmp`, generate the `.env` file content with this 
 # ============================================================================
 
 # ============================================================================
-# Binary Paths (Required for Docker Runtime)
+# Container CLI Configuration
+# ============================================================================
+# docker or podman. Podman users do not need a docker alias.
+DOCKER_CLI=<value>
+
+# ============================================================================
+# Binary Paths (Required for the container runtime)
 # ============================================================================
 TERRAFORM_BINARY_PATH=<value>
 TFPOLICY_BINARY_PATH=<value>
@@ -769,7 +816,7 @@ OUTPUT_DIR=<value>
 INPUT_FILE=<value>
 MAX_WORKERS=<value>
 
-[... optional Docker configuration section ...]
+[... optional Container configuration section: IMAGE_NAME, IMAGE_TAG, CONTAINER_PREFIX, DOCKER_RUN_EXTRA_ARGS ...]
 
 [... optional Timeout configuration section ...]
 
@@ -813,10 +860,10 @@ Run a configuration check (input files not needed yet):
 ```
 
 This will verify:
-- 🟢 **docker**: Docker daemon is running (already checked in step 1)
+- 🟢 **docker**: Container engine (`DOCKER_CLI`) is running (already checked in step 1)
 - 🟢 **env**: Environment variables are properly configured
 - 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 3)
-- 🟢 **image**: Docker image is available (already checked in step 1)
+- 🟢 **image**: Container image is available (already checked in step 1)
 - 🟢 **mcp**: MCP server is accessible (already checked in step 1)
 
 **For Local Mode:**
@@ -827,15 +874,17 @@ Run a configuration check (input files may not be ready yet):
 ```
 
 This will verify:
-- 🟢 **docker**: Docker daemon is running (already checked in step 1)
+- 🟢 **docker**: Container engine (`DOCKER_CLI`) is running (already checked in step 1)
 - 🟢 **env**: Environment variables are properly configured
 - 🟢 **binaries**: terraform and tfpolicy binaries are available (already checked in step 3)
-- 🟢 **image**: Docker image is available (already checked in step 1)
+- 🟢 **image**: Container image is available (already checked in step 1)
 - 🟢 **mcp**: MCP server is accessible (already checked in step 1)
 - 🟢 **output**: OUTPUT_DIR is empty
 - 🟢 **local**: EXTERNAL_REPO_DIR is not set
 
 **Note:** Input file check is intentionally skipped here because users often prepare the data directory after creating `.env`. You can run `./pre-check.sh input` later after setting up your data directory.
+
+**Note:** `docker` in the commands above is the name of the container-engine check, not the CLI itself. Keep it as `docker` even when `DOCKER_CLI=podman` — `pre-check.sh` reads `DOCKER_CLI` from `.env` and reports the engine it actually probed.
 
 **If any checks fail (🔴):**
 - Show the error details from the pre-flight check output

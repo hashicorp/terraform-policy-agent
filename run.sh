@@ -248,6 +248,33 @@ fi
 [ -n "$PRESERVED_INPUT_FILE" ] && INPUT_FILE="$PRESERVED_INPUT_FILE"
 [ -n "$PRESERVED_LOCAL_SKILLS_DIR" ] && LOCAL_SKILLS_DIR="$PRESERVED_LOCAL_SKILLS_DIR"
 
+
+# ============================================================================
+# Container CLI Resolution
+# ============================================================================
+# Resolve the container CLI used to run the agent (docker or podman).
+# Priority: .env > environment variable > default (docker)
+#
+# DOCKER_CLI is deliberately NOT in the PRESERVED_* list above: a value set in
+# .env is meant to win over an exported environment variable, so that .env stays
+# the single place where the container CLI is configured.
+DOCKER_CLI="${DOCKER_CLI:-docker}"
+
+if ! command -v "${DOCKER_CLI}" >/dev/null 2>&1; then
+    echo "ERROR: Container CLI '${DOCKER_CLI}' not found in PATH"
+    echo ""
+    echo "Please choose one of the following options:"
+    echo "  1. Install ${DOCKER_CLI}, or start it if it is already installed"
+    echo "  2. Set DOCKER_CLI to an available CLI (docker or podman) in .env file"
+    exit 1
+fi
+
+# Export so that run_with_local_preparation.sh, run_with_external_repo.sh and
+# run_pipeline.py all use the same CLI without re-resolving it inconsistently.
+export DOCKER_CLI
+export DOCKER_RUN_EXTRA_ARGS="${DOCKER_RUN_EXTRA_ARGS:-}"
+
+
 # ============================================================================
 # Argument Parsing
 # ============================================================================
