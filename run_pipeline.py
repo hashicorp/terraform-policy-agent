@@ -495,15 +495,16 @@ class PipelineExecutor:
         """Verify that Stage 2 produced expected output files for a policy."""
         policy_name = policy_dir.name
         
-        # Check for policy file (.policy.hcl)
+        # Check for policy file (.policy.hcl or policy.sentinel)
         policy_files = list(policy_dir.glob("*.policy.hcl"))
-        if not policy_files:
+        if not policy_files and not (policy_dir / "policy.sentinel").exists():
             print(f"  ✗ Verification failed: No .policy.hcl file found in {policy_name}")
             return False
         
-        # Check for test file (.policytest.hcl)
+        # Check for test file (.policytest.hcl or non-empty test/ directory for Sentinel)
         test_files = list(policy_dir.glob("*.policytest.hcl"))
-        if not test_files:
+        sentinel_test_files = list((policy_dir / "test").rglob("*")) if (policy_dir / "test").exists() else []
+        if not test_files and not sentinel_test_files:
             print(f"  ✗ Verification failed: No .policytest.hcl file found in {policy_name}")
             return False
         
@@ -1014,6 +1015,11 @@ class PipelineExecutor:
         
         return failed == 0
     
+    def _is_sentinel_policy(self, policy_dir: Path) -> bool:
+        """Check if a policy directory contains Sentinel policy (not TF Policy)"""
+        # Check if any .sentinel file exists in the directory
+        return any(policy_dir.glob("*.sentinel"))
+
     def _run_single_fixtures(self, policy_dir: str, index: int, total: int, retry: bool = False) -> Tuple[str, bool, str]:
         """
         Run validation fixtures generation for a single policy directory
@@ -1027,6 +1033,12 @@ class PipelineExecutor:
         Returns:
             Tuple of (policy_name, success, error_message)
         """
+        # Skip Sentinel policies (validation fixtures not applicable)
+        policy_path = self.output_dir / policy_dir
+        if self._is_sentinel_policy(policy_path):
+            print(f"  [{index}/{total}] Skipping (Sentinel): {policy_dir}")
+            return (policy_dir, True, "SKIPPED_SENTINEL")
+
         log_suffix = "_retry" if retry else ""
         log_file = self.output_dir / policy_dir / f"stage4_fixtures{log_suffix}.log"
         
@@ -1051,7 +1063,6 @@ class PipelineExecutor:
             return (policy_dir, False, "Execution failed")
         
         # Verify output even if exit code was 0
-        policy_path = self.output_dir / policy_dir
         if not self._verify_stage4_output(policy_path):
             return (policy_dir, False, "Output verification failed")
         
