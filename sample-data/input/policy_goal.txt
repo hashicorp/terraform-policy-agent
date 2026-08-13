@@ -1,2 +1,4 @@
-Generate the following TF Policies:
+Generate Sentinel Policies:
+- CloudFront.6
 - AutoScaling.1
+- ACM.1
