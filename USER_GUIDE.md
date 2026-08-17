@@ -35,7 +35,7 @@ The Terraform Policy Agent is a tool that automatically converts Sentinel polici
 **Before using the skills, you must complete the following steps manually:**
 - Step 1: Extract the Package
 - Step 2: Prepare Coding Agent
-- Step 3: Install Docker
+- Step 3: Install a Container Engine (Docker or Podman)
 - Step 4: Setup MCP Server
 - Step 5: Prepare Required Binaries
 - Step 6: Prepare Conversion Data
@@ -84,9 +84,10 @@ Launch:
 copilot
 ```
 
-### Step 3: Install Docker
+### Step 3: Install a Container Engine
 
-If you don't have Docker yet, install it on your system:
+The agent works with either Docker or Podman. If you don't have one yet, install it on
+your system:
 
 **Option A: Docker Desktop**
 - Download: https://www.docker.com/products/docker-desktop
@@ -94,10 +95,22 @@ If you don't have Docker yet, install it on your system:
 **Option B: Rancher Desktop**
 - Download: https://rancherdesktop.io/
 
+**Option C: Podman Desktop**
+- Download: https://podman-desktop.io/
+
 **Verify installation:**
 ```bash
 docker --version
+# or, for Podman
+podman --version
 ```
+
+**Podman users:** the agent is told which CLI to use by `DOCKER_CLI` in `.env`. You don't
+have to write it yourself — the setup skill detects the installed CLIs, asks you to pick
+one if both are present ([Step 11](#step-11-container-image-selection)), and writes the
+value for you. That one setting covers `run.sh`, `stop.sh`, `pre-check.sh` and the build
+scripts, so **no `docker` alias is needed**. In the commands below, replace `docker` with
+`podman`.
 
 
 ### Step 4: Setup MCP Server
@@ -106,8 +119,8 @@ The agent requires a running MCP (Model Context Protocol) server for Terraform o
 **Pull and run the MCP server:**
 
 ```bash
-# Pull the MCP server image
-docker pull docker.io/hashicorp/terraform-mcp-server:0.3.3
+# Pull the MCP server image (use `podman` instead of `docker` if that is your CLI)
+docker pull docker.io/hashicorp/terraform-mcp-server:1.1.0
 
 # Run the MCP server
 docker run -d \
@@ -117,14 +130,14 @@ docker run -d \
   -e TRANSPORT_HOST=0.0.0.0 \
   -e MCP_SESSION_MODE=stateless \
   --restart unless-stopped \
-  docker.io/hashicorp/terraform-mcp-server:0.3.3
+  docker.io/hashicorp/terraform-mcp-server:1.1.0
 ```
 
 **Verify the server is running:**
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
   curl http://host.docker.internal:8500/health
 ```
 
@@ -212,11 +225,17 @@ Choose `tfpac-setup` from the list of available skills to start the interactive 
 
 Press Enter in this state to execute the skill and begin the configuration wizard.
 
-### Step 11: Docker image selection
+### Step 11: Container image selection
 
 ![Docker Image Selection](photo/setup/(4)docker_image_selection.png)
 
-Here, select the recommended Docker image (1. Yes). If the Docker image is not available locally, the system will help you pull it. In that case, follow the instructions to pull the image.
+Before this, the wizard determines which container CLI to use. If both `docker` and
+`podman` are installed it asks you to pick one; if only one is installed it uses that one
+without asking.
+
+Here, select the recommended container image (1. Yes). If the image is not available
+locally, the system will help you pull it. In that case, follow the instructions to pull
+the image.
 
 ### Step 12: Select execution mode
 
@@ -256,11 +275,20 @@ Choose your authentication method: LiteLLM (for enterprise endpoints), Amazon Be
 
 Here, select the default (1. No). You can optionally customize pipeline settings such as data directories, input/output paths, and maximum workers for parallel processing.
 
-### Step 17: Additional Docker settings
+### Step 17: Additional container settings
 
 ![Additional Docker](photo/setup/(10)additinal_docker.png)
 
-Here, select the default (1. No). You can optionally configure additional Docker settings like container prefix.
+Here, select the default (1. No). You can optionally configure additional container
+settings: the container prefix, the image name and tag, the container CLI (`DOCKER_CLI`,
+already set in [Step 11](#step-11-container-image-selection)), and
+`DOCKER_RUN_EXTRA_ARGS`.
+
+`DOCKER_RUN_EXTRA_ARGS` is appended verbatim to the container run command and is only
+needed for Podman on Linux — `--security-opt label=disable` on SELinux-enforcing hosts,
+and `--add-host=host.docker.internal:host-gateway` if a rootless container cannot reach
+the MCP server on the host. Leave it empty on macOS. See
+[README.md](README.md#container-cli) for the full table.
 
 ### Step 18: Timeout configuration
 
@@ -272,7 +300,7 @@ Here, select the default (1. No). You can optionally adjust timeout values for e
 
 ![Configuration Check](photo/setup/(12)check.png)
 
-Confirm that all required components (Docker, MCP server, binaries, and so on) are properly configured and accessible, before creating the `.env` file. If everything looks good, select "1. Yes" to proceed.
+Confirm that all required components (container engine, MCP server, binaries, and so on) are properly configured and accessible, before creating the `.env` file. If everything looks good, select "1. Yes" to proceed.
 
 ### Step 20: Preview generated .env file
 
@@ -299,11 +327,12 @@ Review the setup completion report showing configuration summary and next steps.
 
 - **For GitHub Copilot:** Access token
 
-  Run this command to authenticate and retrieve your GitHub Copilot tokens:
+  Run this command to authenticate and retrieve your GitHub Copilot tokens (use `podman`
+  instead of `docker` if that is your CLI):
 
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.29 \
+    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
     sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
   ```
 

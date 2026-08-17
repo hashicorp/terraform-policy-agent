@@ -1,10 +1,32 @@
 #!/usr/bin/env python3
+# Copyright IBM Corp. 2026
+
 import argparse
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+def strip_inline_comment(value: str) -> str:
+    """Drop a trailing `# ...` comment the way `set -a; . ./.env` does.
+
+    The shell scripts read .env with `source`, so this must agree with bash on where a
+    value ends: a comment starts at a `#` that is outside quotes and preceded by
+    whitespace (one space is enough). `IMAGE_TAG=v1#2` and `FRAGMENT=#anchor` are kept
+    as-is, and a `#` inside quotes is data.
+    """
+    in_single = False
+    in_double = False
+    for i, ch in enumerate(value):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double and i > 0 and value[i - 1] in " \t":
+            return value[:i]
+    return value
 
 
 def parse_env_file(path: Path) -> dict:
@@ -16,8 +38,7 @@ def parse_env_file(path: Path) -> dict:
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        value = value.split("  #")[0].split("\t#")[0].strip()
-        data[key.strip()] = value
+        data[key.strip()] = strip_inline_comment(value).strip()
     return data
 
 

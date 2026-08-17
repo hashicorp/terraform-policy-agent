@@ -2,11 +2,37 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+
+def strip_inline_comment(value: str) -> str:
+    """Drop a trailing `# ...` comment the way `set -a; . ./.env` does.
+
+    The shell scripts read .env with `source`, so this module must agree with bash on
+    where a value ends. Bash starts a comment at a `#` that is outside quotes and
+    preceded by whitespace; a single space is enough. So:
+
+        DATA_DIR=./data  # note   -> ./data
+        DATA_DIR=./data # note    -> ./data
+        IMAGE_TAG=v1#2            -> v1#2      (no whitespace before #)
+        FRAGMENT=#anchor          -> #anchor   (nothing precedes the #)
+        EXTRA="a # b"  # note     -> "a # b"   (# inside quotes is data)
+    """
+    in_single = False
+    in_double = False
+    for i, ch in enumerate(value):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double and i > 0 and value[i - 1] in " \t":
+            return value[:i]
+    return value
 
 
 def parse_env_file(path: Path) -> dict:
@@ -18,7 +44,7 @@ def parse_env_file(path: Path) -> dict:
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        data[key.strip()] = value.strip()
+        data[key.strip()] = strip_inline_comment(value).strip()
     return data
 
 
@@ -27,11 +53,41 @@ def resolve_path(base: Path, value: str) -> Path:
     return path if path.is_absolute() else (base / path).resolve()
 
 
-def check_docker_daemon() -> bool:
-    """Check if Docker daemon is running"""
+def unquote(value: str) -> str:
+    """Strip one layer of surrounding quotes from a raw .env value.
+
+    parse_env_file() returns the value verbatim, whereas the shell scripts get it via
+    `source` and therefore see it already unquoted. Stripping here keeps both readers
+    in agreement for values that must be quoted in .env (i.e. those containing spaces).
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def resolve_docker_cli(env: dict) -> str:
+    """Resolve the container CLI to use: docker or podman.
+
+    Priority: .env > environment variable > default (docker), matching run.sh.
+    """
+    return unquote(env.get("DOCKER_CLI") or "") or os.environ.get("DOCKER_CLI") or "docker"
+
+
+def resolve_docker_run_extra_args(env: dict) -> list:
+    """Resolve extra flags appended to container run commands.
+
+    Same priority as resolve_docker_cli. Split with shlex so that a value such as
+    '--security-opt label=disable' becomes two arguments.
+    """
+    value = unquote(env.get("DOCKER_RUN_EXTRA_ARGS") or "") or os.environ.get("DOCKER_RUN_EXTRA_ARGS") or ""
+    return shlex.split(value)
+
+
+def check_docker_daemon(docker_cli: str = "docker") -> bool:
+    """Check if the container engine is running"""
     try:
         result = subprocess.run(
-            ["docker", "ps"],
+            [docker_cli, "ps"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,
@@ -41,21 +97,25 @@ def check_docker_daemon() -> bool:
         return False
 
 
-def docker_image_exists(image: str) -> bool:
-    result = subprocess.run(
-        ["docker", "image", "inspect", image],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+def docker_image_exists(image: str, docker_cli: str = "docker") -> bool:
+    try:
+        result = subprocess.run(
+            [docker_cli, "image", "inspect", image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return False
     return result.returncode == 0
 
 
-def check_mcp_server_health(image: str) -> dict:
-    """Check if terraform-mcp-server is running and healthy using Docker container"""
+def check_mcp_server_health(image: str, docker_cli: str = "docker", extra_args: list = None) -> dict:
+    """Check if terraform-mcp-server is running and healthy using a container"""
     try:
         result = subprocess.run(
             [
-                "docker", "run", "--rm", "--entrypoint", "",
+                docker_cli, "run", "--rm", "--entrypoint", "",
+                *(extra_args or []),
                 image,
                 "curl", "-s", "--connect-timeout", "3", "--max-time", "5",
                 "http://host.docker.internal:8500/health"
@@ -95,11 +155,11 @@ def check_mcp_server_health(image: str) -> dict:
         }
 
 
-def find_terraform_pac_agent_image() -> dict:
+def find_terraform_pac_agent_image(docker_cli: str = "docker") -> dict:
     """Find terraform-pac-agent image with any tag"""
     try:
         result = subprocess.run(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+            [docker_cli, "images", "--format", "{{.Repository}}:{{.Tag}}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -157,12 +217,12 @@ def get_binary_arch(binary_path: str) -> tuple[str | None, str | None]:
         return None, None
 
 
-def get_image_arch(image: str) -> tuple[str | None, str | None]:
-    """Get architecture and OS of a Docker image via `docker image inspect`.
+def get_image_arch(image: str, docker_cli: str = "docker") -> tuple[str | None, str | None]:
+    """Get architecture and OS of a container image via `<cli> image inspect`.
     Returns (arch, os) where arch is e.g. 'arm64'/'amd64'/None and os is 'linux'/'macos'/None."""
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", image, "--format", "{{.Architecture}}|{{.Os}}"],
+            [docker_cli, "image", "inspect", image, "--format", "{{.Architecture}}|{{.Os}}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -199,15 +259,16 @@ def print_interactive_report(result: dict) -> None:
     
     # Check items with status
     checks = result.get("checks", {})
-    
+    docker_cli = result.get("docker_cli", "docker")
+
     print("📋 CHECK ITEMS:")
     print()
-    
-    # 1. Docker daemon (subcommand: docker)
+
+    # 1. Container engine (subcommand: docker)
     if "docker_daemon_running" in checks:
         status = "🟢" if checks["docker_daemon_running"] else "🔴"
         status_text = "Running" if checks["docker_daemon_running"] else "Not running"
-        print(f"   {status} docker    : Docker Daemon - {status_text}")
+        print(f"   {status} docker    : Container Engine ({docker_cli}) - {status_text}")
     
     # 2. Environment variables (subcommand: env)
     if "missing_keys" in checks or "auth_provider_conflict" in checks:
@@ -287,11 +348,11 @@ def print_interactive_report(result: dict) -> None:
         if has_external_repo:
             print(f"                   External Repo: {checks['external_repo_dir']}")
     
-    # 5. Docker image (subcommand: image)
+    # 5. Container image (subcommand: image)
     if "docker_image_exists" in checks:
         status = "🟢" if checks["docker_image_exists"] else "🔴"
         status_text = "Found" if checks["docker_image_exists"] else "Not found"
-        print(f"   {status} image     : Docker Image - {status_text}")
+        print(f"   {status} image     : Container Image - {status_text}")
         if "docker_image" in checks:
             print(f"                   Image: {checks['docker_image']}")
         
@@ -319,7 +380,7 @@ def print_interactive_report(result: dict) -> None:
             if "mcp_check_image" in checks:
                 print(f"                   Checked using: {checks['mcp_check_image']}")
             print(f"                   Help: Start MCP server with:")
-            print(f"                         docker run -d --name terraform-mcp-server \\")
+            print(f"                         {docker_cli} run -d --name terraform-mcp-server \\")
             print(f"                           -p 8500:8080 \\")
             print(f"                           -e TRANSPORT_MODE=streamable-http \\")
             print(f"                           -e TRANSPORT_HOST=0.0.0.0 \\")
@@ -360,8 +421,16 @@ def print_interactive_report(result: dict) -> None:
     # 9. Local mode (subcommand: local)
     if "is_local_mode" in checks:
         is_local = checks["is_local_mode"]
-        status = "🟢" if is_local else "🔴"
-        status_text = "EXTERNAL_REPO_DIR is not set" if is_local else "EXTERNAL_REPO_DIR is set (not local mode)"
+        if is_local:
+            status = "🟢"
+            status_text = "EXTERNAL_REPO_DIR is not set"
+        elif checks.get("local_mode_required"):
+            status = "🔴"
+            status_text = "EXTERNAL_REPO_DIR is set (not local mode)"
+        else:
+            # `all` run: external mode is a valid configuration, not a failure.
+            status = "🟢"
+            status_text = "EXTERNAL_REPO_DIR is set (external mode)"
         print(f"   {status} local     : Local Mode - {status_text}")
 
     print()
@@ -433,6 +502,13 @@ def main() -> int:
     repo_root = Path.cwd()
     env_path = repo_root / ".env"
 
+    # The container CLI must be resolved before any container command runs, which is
+    # earlier than the full .env load further below (the engine check runs first).
+    # A missing .env is not fatal here: it is reported by the regular .env check.
+    early_env = parse_env_file(env_path) if env_path.exists() else {}
+    docker_cli = resolve_docker_cli(early_env)
+    docker_run_extra_args = resolve_docker_run_extra_args(early_env)
+
     # Parse command line arguments
     output_format = "interactive"  # default
     check_targets = []  # list of checks to run
@@ -451,15 +527,16 @@ def main() -> int:
             print()
             print("Subcommands (can specify multiple):")
             print("  all                 Run all checks (default)")
-            print("  docker              Check Docker daemon")
+            print("  docker              Check container engine (docker or podman)")
             print("  env                 Check environment variables")
             print("  binaries            Check terraform/tfpolicy binaries")
             print("  input               Check input file")
-            print("  image               Check Docker image")
+            print("  image               Check container image")
             print("  mcp                 Check MCP server")
             # print("  database            Check policy database")
             print("  output              Check OUTPUT_DIR is empty")
-            print("  local               Check EXTERNAL_REPO_DIR is not set (local mode only)")
+            print("  local               Require local mode: fail if EXTERNAL_REPO_DIR is set")
+            print("                      (`all` only reports the mode, it does not require it)")
             print()
             print("Options:")
             print("  --json              Output in JSON format (for automation)")
@@ -469,7 +546,7 @@ def main() -> int:
             print("Examples:")
             print("  pre_check.py                           # Run all checks (interactive)")
             print("  pre_check.py --json                    # Run all checks (JSON)")
-            print("  pre_check.py docker                    # Check Docker daemon only")
+            print("  pre_check.py docker                    # Check container engine only")
             print("  pre_check.py docker binaries mcp       # Check multiple items")
             print("  pre_check.py mcp --json                # Check MCP server (JSON)")
             return 0
@@ -491,18 +568,21 @@ def main() -> int:
 
     result = {
         "ok": True,
+        "docker_cli": docker_cli,
         "checks": {},
         "errors": [],
         "warnings": [],
     }
 
-    # Check Docker daemon first (required for most checks)
+    # Check the container engine first (required for most checks)
     if "all" in check_targets or "docker" in check_targets:
-        docker_daemon_running = check_docker_daemon()
+        docker_daemon_running = check_docker_daemon(docker_cli)
         result["checks"]["docker_daemon_running"] = docker_daemon_running
         if not docker_daemon_running:
             result["ok"] = False
-            result["errors"].append("Docker daemon is not running or not accessible")
+            result["errors"].append(
+                f"{docker_cli} is not running or not accessible"
+            )
             # Early exit if only checking docker
             if check_targets == ["docker"]:
                 if output_format == "json":
@@ -576,7 +656,7 @@ def main() -> int:
     # Binaries check
     if "all" in check_targets or "binaries" in check_targets:
         image = f"{env.get('IMAGE_NAME', '')}:{env.get('IMAGE_TAG', '')}"
-        image_arch, image_os = get_image_arch(image) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else (None, None)
+        image_arch, image_os = get_image_arch(image, docker_cli) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else (None, None)
 
         tf_exists = terraform_path.exists()
         tf_arch, tf_os = get_binary_arch(str(terraform_path)) if tf_exists else (None, None)
@@ -679,23 +759,23 @@ def main() -> int:
             print_interactive_report(result)
         return 0 if result["ok"] else 1
 
-    # Docker image check
+    # Container image check
     if "all" in check_targets or "image" in check_targets:
         # Check for terraform-pac-agent image (any version)
-        pac_agent_images = find_terraform_pac_agent_image()
+        pac_agent_images = find_terraform_pac_agent_image(docker_cli)
         result["checks"]["terraform_pac_agent_images"] = pac_agent_images
         
         # Also check the specific image from .env
         image = f"{env.get('IMAGE_NAME', '')}:{env.get('IMAGE_TAG', '')}"
         result["checks"]["docker_image"] = image
-        result["checks"]["docker_image_exists"] = docker_image_exists(image) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else False
-        
+        result["checks"]["docker_image_exists"] = docker_image_exists(image, docker_cli) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else False
+
         if not result["checks"]["docker_image_exists"]:
             if pac_agent_images["found"]:
                 result["warnings"].append(f"Specified image not found: {image}, but other terraform-pac-agent images are available: {', '.join(pac_agent_images['images'][:3])}")
             else:
                 result["ok"] = False
-                result["errors"].append(f"docker image not found: {image}")
+                result["errors"].append(f"container image not found: {image}")
 
     # Early exit for image-only check
     if check_targets == ["image"]:
@@ -715,7 +795,7 @@ def main() -> int:
             result["errors"].append("IMAGE_NAME and IMAGE_TAG must be set in .env for MCP check")
         else:
             check_image = f"{image_name}:{image_tag}"
-            mcp_health = check_mcp_server_health(check_image)
+            mcp_health = check_mcp_server_health(check_image, docker_cli, docker_run_extra_args)
             result["checks"]["mcp_server"] = mcp_health
             result["checks"]["mcp_check_image"] = check_image
             if not mcp_health["available"]:
@@ -780,16 +860,24 @@ def main() -> int:
             print_interactive_report(result)
         return 0 if result["ok"] else 1
 
-    # Local mode check
+    # Local mode check.
+    #
+    # External mode is a supported (and documented as primary) way to run the agent, so
+    # a set EXTERNAL_REPO_DIR is only an error when the caller explicitly asked about
+    # local mode. For `all` this is reported as information: `run.sh local` forces local
+    # mode regardless of EXTERNAL_REPO_DIR, and `run.sh` with no subcommand picks the
+    # mode from it, so neither value blocks a run.
     if "all" in check_targets or "local" in check_targets:
         external_repo_dir_val = env.get("EXTERNAL_REPO_DIR")
         is_local = not bool(external_repo_dir_val)
         result["checks"]["is_local_mode"] = is_local
-        if not is_local:
+        result["checks"]["local_mode_required"] = "local" in check_targets
+        if not is_local and "local" in check_targets:
             result["ok"] = False
             result["errors"].append(
                 f"EXTERNAL_REPO_DIR is set ({external_repo_dir_val}); "
-                "remove it from .env to use local mode"
+                "remove it from .env to use local mode, "
+                "or use `./run.sh local` to force local mode for a single run"
             )
 
     # Early exit for local-only check
