@@ -87,6 +87,8 @@ Run the precheck script based on the selected workflow:
 ./pre-check.sh docker env binaries image mcp
 ```
 
+**NOTE:** `docker` in the command above is the name of the container-engine check, not the CLI itself. Keep it as `docker` even when `DOCKER_CLI=podman` in `.env` — the script reads `DOCKER_CLI` on its own and reports the engine it actually probed.
+
 **Analyze the output:**
 
 Look for the status line at the top of the report:
@@ -97,13 +99,13 @@ Look for the status line at the top of the report:
 
 Review the error messages and provide concise guidance. Common issues and fixes:
 
-- **Docker image not found** → Login to IBM Cloud Container Registry (`docker login icr.io -u iamapikey`) and pull the image
+- **Container image not found** → Login to IBM Cloud Container Registry (`<DOCKER_CLI> login icr.io -u iamapikey`) and pull the image, where `<DOCKER_CLI>` is the value of `DOCKER_CLI` in `.env` (`docker` by default, `podman` if configured)
 - **Environment variables missing** → Add required variables (MODEL_NAME, AUTH_PROVIDER, etc.) to `.env` file
 - **Binary not found** → Obtain binaries from HashiCorp representative or update TERRAFORM_BINARY_PATH/TFPOLICY_BINARY_PATH in `.env`
 - **Binary not executable** → Run `chmod +x <path>` to add execute permission
-- **Binary arch mismatch** → Binary CPU architecture does not match the Docker image; obtain the correct architecture binary (e.g. `arm64` vs `amd64`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
-- **Binary OS mismatch** → Binary OS does not match the Docker image (e.g. `macos` binary used with a `linux` image); obtain the correct OS binary (`linux`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
-- **MCP server not available** → Start MCP server with: `docker run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:0.3.3`
+- **Binary arch mismatch** → Binary CPU architecture does not match the container image; obtain the correct architecture binary (e.g. `arm64` vs `amd64`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
+- **Binary OS mismatch** → Binary OS does not match the container image (e.g. `macos` binary used with a `linux` image); obtain the correct OS binary (`linux`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
+- **MCP server not available** → Start MCP server with: `<DOCKER_CLI> run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:1.1.0` (the `pre-check.sh` report already prints this line with the configured CLI substituted)
 - **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
 - **OUTPUT_DIR not empty** → Delete its contents or set a new OUTPUT_DIR in `.env` before running the pipeline
 
