@@ -641,8 +641,11 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                     fi
                 done
 
-                cp "$policy_dir/main.tf" "$target_dir/$sentinel_basename.tf"
-                echo "  ✓ $sentinel_basename.tf"
+                # main.tf is an internal artifact: it is the validated resource schema that
+                # Stage 2 uses to author the policy and Stage 4 uses to build fixtures. It is
+                # not part of the policy the external repo consumes, so it is not deployed.
+                # The same applies to Stage 4's pass_config.tf / fail_config.tf, which are
+                # likewise never copied.
 
                 cp "$policy_dir/report.md" "$target_dir/$sentinel_basename.report.md"
                 echo "  ✓ $sentinel_basename.report.md"
