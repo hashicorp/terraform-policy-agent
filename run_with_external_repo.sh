@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright IBM Corp. 2026
+
 set -e
 
 # Parse command line arguments
@@ -407,6 +409,33 @@ if [ "$RUN_GENERATE" = true ]; then
     fi
 fi
 
+# Extract the target policy filenames declared inside a .policytest.hcl file.
+# Prints one target per line. Handles both single-line and multi-line targets blocks.
+extract_policytest_targets() {
+    awk '
+        /policytest[[:space:]]*\{/ { in_block = 1 }
+        in_block {
+            line = $0
+            while (match(line, /"[^"]*"/)) {
+                t = substr(line, RSTART + 1, RLENGTH - 2)
+                if (t != "") print t
+                line = substr(line, RSTART + RLENGTH)
+            }
+            if ($0 ~ /\}/) in_block = 0
+        }
+    ' "$1"
+}
+
+# Rewrite every quoted "<something>.policy.hcl" reference in a deployed test file so it
+# points at the renamed policy file. Safe because the caller has already verified that the
+# file targets only this policy directory's own policy.
+rewrite_policytest_targets() {
+    local file="$1"
+    local new_policy_basename="$2"
+    sed -i.bak -E "s|\"[A-Za-z0-9_.-]+\.policy\.hcl\"|\"${new_policy_basename}.policy.hcl\"|g" "$file"
+    rm -f "$file.bak"
+}
+
 # Phase 3: Postprocessing
 if [ "$RUN_POSTPROCESS" = true ]; then
     echo "=========================================="
@@ -485,57 +514,148 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 mkdir -p "$target_dir"
                 
                 # Check required files - use dynamic filenames based on policy directory name
-                # Find policy and test files that match the directory name (case-insensitive)
+                # Find the policy file that matches the directory name (case-insensitive)
                 policy_file=""
-                policytest_file=""
-                
-                # Search for files matching the pattern (case-insensitive)
+                policy_dir_name_lower=$(echo "$policy_dir_name" | tr '[:upper:]' '[:lower:]')
+
                 for file in "$policy_dir"/*.policy.hcl; do
                     if [ -f "$file" ]; then
                         filename=$(basename "$file" .policy.hcl)
-                        # Case-insensitive comparison using tr
                         filename_lower=$(echo "$filename" | tr '[:upper:]' '[:lower:]')
-                        policy_dir_name_lower=$(echo "$policy_dir_name" | tr '[:upper:]' '[:lower:]')
                         if [ "$filename_lower" = "$policy_dir_name_lower" ]; then
                             policy_file="$file"
                             break
                         fi
                     fi
                 done
-                
+
+                # ENG-02: collect EVERY test file, not just the one matching the directory name.
+                # ENG-07: the primary file is <policy_dir>.policytest.hcl; extras use -N.
+                primary_policytest=""
+                numbered_policytests=()
+                naming_error=""
+
                 for file in "$policy_dir"/*.policytest.hcl; do
-                    if [ -f "$file" ]; then
-                        filename=$(basename "$file" .policytest.hcl)
-                        # Case-insensitive comparison using tr
-                        filename_lower=$(echo "$filename" | tr '[:upper:]' '[:lower:]')
-                        policy_dir_name_lower=$(echo "$policy_dir_name" | tr '[:upper:]' '[:lower:]')
-                        if [ "$filename_lower" = "$policy_dir_name_lower" ]; then
-                            policytest_file="$file"
-                            break
-                        fi
+                    [ -f "$file" ] || continue
+                    filename=$(basename "$file" .policytest.hcl)
+                    filename_lower=$(echo "$filename" | tr '[:upper:]' '[:lower:]')
+
+                    if [ "$filename_lower" = "$policy_dir_name_lower" ]; then
+                        primary_policytest="$file"
+                    elif [[ "$filename_lower" =~ ^${policy_dir_name_lower}-([0-9]+)$ ]]; then
+                        numbered_policytests+=("$file")
+                    else
+                        naming_error="$(basename "$file")"
+                        break
                     fi
                 done
-                
-                if [ -z "$policy_file" ] || [ -z "$policytest_file" ] || [ ! -f "$policy_dir/main.tf" ] || [ ! -f "$policy_dir/report.md" ]; then
+
+                if [ -n "$naming_error" ]; then
+                    FAILED_POLICIES+=("$sentinel_path (test file does not follow naming convention: $naming_error)")
+                    policy_found=true
+                    break
+                fi
+
+                if [ -z "$policy_file" ] || [ -z "$primary_policytest" ] || [ ! -f "$policy_dir/main.tf" ] || [ ! -f "$policy_dir/report.md" ]; then
                     FAILED_POLICIES+=("$sentinel_path (missing files)")
                     policy_found=true
                     break
                 fi
-                
+
+                # ENG-03: a test file may only target this policy directory's own policy.
+                # The external repo layout puts each policy in its own directory, so a
+                # multi-target test would be deployed without all of its target policies.
+                # Fail with a clear error rather than producing an incomplete test suite.
+                expected_target_lower="${policy_dir_name_lower}.policy.hcl"
+                target_error=""
+
+                for file in "$primary_policytest" "${numbered_policytests[@]}"; do
+                    [ -f "$file" ] || continue
+                    file_targets=$(extract_policytest_targets "$file")
+                    if [ -z "$file_targets" ]; then
+                        target_error="$(basename "$file") has no policytest.targets block"
+                        break
+                    fi
+                    while IFS= read -r one_target; do
+                        [ -z "$one_target" ] && continue
+                        one_target_lower=$(echo "$one_target" | tr '[:upper:]' '[:lower:]')
+                        if [ "$one_target_lower" != "$expected_target_lower" ]; then
+                            target_error="$(basename "$file") targets a policy outside this directory: $one_target"
+                            break
+                        fi
+                    done <<< "$file_targets"
+                    [ -n "$target_error" ] && break
+                done
+
+                if [ -n "$target_error" ]; then
+                    FAILED_POLICIES+=("$sentinel_path (multi-target or untargeted test file: $target_error)")
+                    policy_found=true
+                    break
+                fi
+
                 echo "📦 Deploying: $policy_dir_name → tfpolicy/$sentinel_basename/"
-                
+
                 cp "$policy_file" "$target_dir/$sentinel_basename.policy.hcl"
                 echo "  ✓ $sentinel_basename.policy.hcl"
-                
-                cp "$policytest_file" "$target_dir/$sentinel_basename.policytest.hcl"
+
+                # Deploy the primary test file, then the numbered ones, preserving the -N suffix.
+                # ENG-10: the policy file is renamed to $sentinel_basename.policy.hcl, so the
+                # targets inside each copied test file must be rewritten to match.
+                cp "$primary_policytest" "$target_dir/$sentinel_basename.policytest.hcl"
+                rewrite_policytest_targets "$target_dir/$sentinel_basename.policytest.hcl" "$sentinel_basename"
                 echo "  ✓ $sentinel_basename.policytest.hcl"
-                
-                cp "$policy_dir/main.tf" "$target_dir/$sentinel_basename.tf"
-                echo "  ✓ $sentinel_basename.tf"
-                
+
+                deployed_test_names=("$sentinel_basename.policytest.hcl")
+                for file in "${numbered_policytests[@]}"; do
+                    [ -f "$file" ] || continue
+                    test_index="$(basename "$file" .policytest.hcl)"
+                    test_index="${test_index##*-}"
+                    cp "$file" "$target_dir/$sentinel_basename-$test_index.policytest.hcl"
+                    rewrite_policytest_targets "$target_dir/$sentinel_basename-$test_index.policytest.hcl" "$sentinel_basename"
+                    echo "  ✓ $sentinel_basename-$test_index.policytest.hcl"
+                    deployed_test_names+=("$sentinel_basename-$test_index.policytest.hcl")
+                done
+
+                # Remove numbered test files left over from a previous deployment of this
+                # policy. Only files this tool names are considered, and only files that are
+                # not part of the set just deployed (comparing against the deployed names —
+                # not against a count — so a non-contiguous -N sequence is never self-deleted).
+                for stale in "$target_dir/$sentinel_basename"-*.policytest.hcl; do
+                    [ -f "$stale" ] || continue
+                    stale_name="$(basename "$stale")"
+                    stale_index="${stale_name%.policytest.hcl}"
+                    stale_index="${stale_index##*-}"
+                    case "$stale_index" in
+                        ''|*[!0-9]*) continue ;;
+                    esac
+                    still_deployed=false
+                    for kept in "${deployed_test_names[@]}"; do
+                        if [ "$kept" = "$stale_name" ]; then
+                            still_deployed=true
+                            break
+                        fi
+                    done
+                    if [ "$still_deployed" = false ]; then
+                        rm -f "$stale"
+                        echo "  ⊘ Removed obsolete $stale_name"
+                    fi
+                done
+
+                # main.tf is an internal artifact: it is the validated resource schema that
+                # Stage 2 uses to author the policy and Stage 4 uses to build fixtures. It is
+                # not part of the policy the external repo consumes, so it is not deployed.
+                # The same applies to Stage 4's pass_config.tf / fail_config.tf, which are
+                # likewise never copied.
+
                 cp "$policy_dir/report.md" "$target_dir/$sentinel_basename.report.md"
                 echo "  ✓ $sentinel_basename.report.md"
-                
+
+                # ENG-08: the deployed report references ./gwt.json, so deploy it alongside.
+                if [ -f "$policy_dir/gwt.json" ]; then
+                    cp "$policy_dir/gwt.json" "$target_dir/gwt.json"
+                    echo "  ✓ gwt.json"
+                fi
+
                 DEPLOYED_POLICIES+=("$sentinel_path")
                 policy_found=true
                 echo ""

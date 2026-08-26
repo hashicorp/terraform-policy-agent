@@ -79,9 +79,6 @@ class PipelineExecutor:
         self.github_copilot_access_token = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN")
         self.github_copilot_refresh_token = os.getenv("GITHUB_COPILOT_REFRESH_TOKEN")
         self.github_copilot_expires = os.getenv("GITHUB_COPILOT_EXPIRES")
-
-        # Amazon Bedrock configuration (only needed if AUTH_PROVIDER=amazon-bedrock)
-        self.model_api_key = os.getenv("MODEL_API_KEY")
         
         # Timeout configuration (in seconds)
         self.stage0_timeout = int(os.getenv("STAGE0_TIMEOUT", "600"))  # 10 minutes
@@ -491,23 +488,105 @@ class PipelineExecutor:
         
         return True
     
+    def _extract_policytest_targets(self, test_file: Path) -> Optional[List[str]]:
+        """Extract the target policy filenames declared in a .policytest.hcl file.
+
+        Returns:
+            The list of target filenames, or None if the file has no policytest
+            block with a targets attribute.
+        """
+        try:
+            text = test_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+        block = re.search(r"policytest\s*\{(.*?)\}", text, re.DOTALL)
+        if not block:
+            return None
+
+        targets = re.search(r"targets\s*=\s*\[(.*?)\]", block.group(1), re.DOTALL)
+        if not targets:
+            return None
+
+        return re.findall(r'"([^"]+)"', targets.group(1))
+
     def _verify_stage2_output(self, policy_dir: Path) -> bool:
-        """Verify that Stage 2 produced expected output files for a policy."""
+        """Verify that Stage 2 produced expected output files for a policy.
+
+        A policy may own one or more `*.policytest.hcl` files. The discovered set must
+        be exactly `<policy_name>.policytest.hcl` plus `<policy_name>-2..N.policytest.hcl`
+        with no gaps, every file must declare its target policy, and no file may target
+        a policy outside this directory.
+        """
         policy_name = policy_dir.name
-        
+
         # Check for policy file (.policy.hcl)
         policy_files = list(policy_dir.glob("*.policy.hcl"))
         if not policy_files:
             print(f"  ✗ Verification failed: No .policy.hcl file found in {policy_name}")
             return False
-        
-        # Check for test file (.policytest.hcl)
-        test_files = list(policy_dir.glob("*.policytest.hcl"))
+
+        # Check for test files (one or more *.policytest.hcl)
+        test_files = sorted(policy_dir.glob("*.policytest.hcl"))
         if not test_files:
             print(f"  ✗ Verification failed: No .policytest.hcl file found in {policy_name}")
             return False
-        
-        print(f"  ✓ Verification passed: Policy and test files created for {policy_name}")
+
+        # Naming convention: <policy_name>.policytest.hcl plus <policy_name>-N.policytest.hcl.
+        # A file outside this convention is a leftover from an earlier attempt, and it would
+        # still be executed by `tfpolicy test --policies=.`.
+        suffix = ".policytest.hcl"
+        indices: List[int] = []
+        for test_file in test_files:
+            stem = test_file.name[: -len(suffix)]
+            if stem == policy_name:
+                indices.append(1)
+                continue
+            numbered = re.fullmatch(rf"{re.escape(policy_name)}-(\d+)", stem)
+            if not numbered:
+                print(f"  ✗ Verification failed: Test file does not follow the naming "
+                      f"convention in {policy_name}: {test_file.name} "
+                      f"(expected {policy_name}{suffix} or {policy_name}-N{suffix})")
+                return False
+            indices.append(int(numbered.group(1)))
+
+        if sorted(indices) != list(range(1, len(indices) + 1)):
+            print(f"  ✗ Verification failed: Test file numbering has gaps or duplicates in "
+                  f"{policy_name}: {[f.name for f in test_files]}")
+            return False
+
+        # Every test file must declare its target, and only this policy's own target.
+        expected_target = f"{policy_name}.policy.hcl"
+        for test_file in test_files:
+            targets = self._extract_policytest_targets(test_file)
+            if targets is None:
+                print(f"  ✗ Verification failed: No policytest.targets block in "
+                      f"{policy_name}/{test_file.name}")
+                return False
+            foreign = [t for t in targets if t.lower() != expected_target.lower()]
+            if foreign:
+                print(f"  ✗ Verification failed: {policy_name}/{test_file.name} targets "
+                      f"policies outside this directory: {foreign} "
+                      f"(expected only {expected_target})")
+                return False
+
+        # The test command must actually have run and passed.
+        report_file = policy_dir / "report.md"
+        if not report_file.exists():
+            print(f"  ✗ Verification failed: report.md not found in {policy_name}")
+            return False
+        report_text = report_file.read_text(encoding="utf-8", errors="replace")
+        if "## Test Execution" not in report_text:
+            print(f"  ✗ Verification failed: report.md has no '## Test Execution' section "
+                  f"in {policy_name}")
+            return False
+        if "- Status: Failure" in report_text:
+            print(f"  ✗ Verification failed: report.md records a failing test run in "
+                  f"{policy_name}")
+            return False
+
+        print(f"  ✓ Verification passed: 1 policy and {len(test_files)} test file(s) "
+              f"created for {policy_name}")
         return True
     
     def _verify_stage4_output(self, policy_dir: Path) -> bool:
@@ -1058,35 +1137,53 @@ class PipelineExecutor:
         return (policy_dir, True, "")
     
     def stage3_summary(self) -> bool:
-        """Stage 3: Generate summary of all policies"""
+        """Stage 3: Generate summary of all policies.
+
+        Stage 3 can exit with code 0 without writing summary.json/summary.md, so a
+        bounded retry is applied — matching the retry behaviour of Stages 1, 2 and 4.
+        """
         print(f"\n{'='*80}")
         print(f"Stage 3: Summary Generation")
         print(f"{'='*80}\n")
-        
-        log_file = self.output_dir / "stage3_summary.log"
-        
+
         # Count policy directories to calculate dynamic timeout
         policy_count = len([d for d in self.output_dir.iterdir() if d.is_dir() and d.name != "goals"])
         # Use configured timeout: base + per-policy
-        timeout_seconds = self.stage3_timeout_base + (policy_count * self.stage3_timeout_per_policy)
-        
-        success = self._run_docker_command(
-            skill="step3-summary",
-            prompt="",
-            stage_name="Stage 3: Summary Generation",
-            log_file=log_file,
-            timeout_seconds=timeout_seconds
-        )
-        
-        if not success:
-            return False
-        
-        # Verify output even if exit code was 0
-        if not self._verify_stage3_output():
-            print("\n❌ Stage 3 output verification failed")
-            return False
-        
-        return True
+        base_timeout = self.stage3_timeout_base + (policy_count * self.stage3_timeout_per_policy)
+
+        total_attempts = self.max_retries + 1
+        for attempt in range(total_attempts):
+            is_retry = attempt > 0
+            log_suffix = "_retry" if is_retry else ""
+            log_file = self.output_dir / f"stage3_summary{log_suffix}.log"
+
+            # Use increased timeout for retry (1.5x), same multiplier as Stage 2
+            timeout_seconds = int(base_timeout * 1.5) if is_retry else base_timeout
+            retry_label = " (retry)" if is_retry else ""
+            if is_retry:
+                print(f"  ⟳ Queuing retry {attempt}/{self.max_retries} for Stage 3")
+                print(f"  Using increased timeout for retry: {timeout_seconds}s "
+                      f"(base: {base_timeout}s, multiplier: 1.5x)")
+
+            success = self._run_docker_command(
+                skill="step3-summary",
+                prompt="",
+                stage_name=f"Stage 3: Summary Generation{retry_label}",
+                container_suffix="retry" if is_retry else "",
+                log_file=log_file,
+                timeout_seconds=timeout_seconds
+            )
+
+            # Verify output even if exit code was 0
+            if success and self._verify_stage3_output():
+                return True
+
+            if attempt < total_attempts - 1:
+                print("\n⚠️  Stage 3 did not produce the required summary files, retrying...")
+
+        print(f"\n❌ Stage 3 output verification failed after {total_attempts} attempt(s) "
+              f"(max retries {self.max_retries} reached)")
+        return False
     
     def stage4_fixtures(self, policy_dirs_filter: Optional[List[str]] = None) -> bool:
         """Stage 4: Generate validation fixtures (parallel execution with priority retry)
