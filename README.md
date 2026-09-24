@@ -129,7 +129,7 @@ cp .env.example .env
 
 Choose one of the following authentication providers:
 
-**Option A: GitHub Copilot**
+**Option A: GitHub Copilot (Default)**
 
 ```bash
 AUTH_PROVIDER=github-copilot
@@ -148,7 +148,7 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
 
-**Option B: LiteLLM (Default)**
+**Option B: LiteLLM**
 
 ```bash
 AUTH_PROVIDER=litellm
@@ -303,10 +303,17 @@ Before running the pipeline, verify all prerequisites are met:
 # Or check specific components
 # ("docker" here is the name of the container-engine check, not the CLI:
 #  keep it as "docker" even when DOCKER_CLI=podman)
+./pre-check.sh workdir   # Working directory path only
 ./pre-check.sh docker    # Container engine only
-./pre-check.sh mcp       # MCP server only
-./pre-check.sh binaries  # terraform/tfpolicy binaries only
 ./pre-check.sh env       # Environment variables only
+./pre-check.sh binaries  # terraform/tfpolicy binaries only
+./pre-check.sh input     # Input file only
+./pre-check.sh image     # Container image only
+./pre-check.sh mcp       # MCP server only
+./pre-check.sh output    # Output directory only
+./pre-check.sh local     # Local mode config only
+./pre-check.sh external  # External mode config only
+./pre-check.sh api       # API credentials only
 
 # JSON output for automation
 ./pre-check.sh --json
@@ -322,8 +329,33 @@ The pre-flight check will verify:
 - 🟢 **input**: Input files exist
 - 🟢 **image**: Container image is available
 - 🟢 **mcp**: MCP server is accessible at localhost:8500
+- 🟢 **output**: Output directory is empty (ready for pipeline)
+- 🟢 **local**: Local mode — `EXTERNAL_REPO_DIR` is not set, `INPUT_DIR`/`INPUT_FILE`/`OUTPUT_DIR` are present
+- 🟢 **external**: External mode — `EXTERNAL_REPO_DIR` is set and the directory exists
+- 🟢 **workdir**: Working directory path has no unsafe characters
+- 🟢 **api**: API credentials are valid (tested via lightweight ping)
 
 If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
+
+**Mode-based check behaviour** — When running `./pre-check.sh` (all checks), the fully ready state looks different depending on your mode. `local` and `external` are mutually exclusive: one will always show 🔴, which is **expected and should be ignored**:
+
+| Check    | Local mode           | External mode        |
+|----------|----------------------|----------------------|
+| docker   | ✅ pass              | ✅ pass              |
+| env      | ✅ pass              | ✅ pass              |
+| binaries | ✅ pass              | ✅ pass              |
+| input    | ✅ pass              | ✅ pass (or ⚠️ warn) |
+| image    | ✅ pass              | ✅ pass              |
+| mcp      | ✅ pass              | ✅ pass              |
+| output   | ✅ pass              | ✅ pass              |
+| local    | ✅ pass              | 🔴 expected — ignore |
+| external | 🔴 expected — ignore | ✅ pass              |
+| workdir  | ✅ pass              | ✅ pass              |
+| api      | ✅ pass              | ✅ pass              |
+
+> **Local mode** (`EXTERNAL_REPO_DIR` not set): `external` shows 🔴 — this is expected, ignore it.
+
+> **External mode** (`EXTERNAL_REPO_DIR` set): `local` shows 🔴 — this is expected, ignore it.
 
 ### Primary Use Case: External Repository Integration
 
@@ -470,7 +502,7 @@ The pipeline runs 4 stages automatically. Each stage must complete before the ne
 | **Stage 2** | Generates policy files and tests for each requirement (runs in parallel) | `data/output/PolicyName/*.hcl`, `*.tf` |
 | **Stage 3** | Creates a consolidated summary report | `data/output/summary.md` |
 
-> **If the pipeline fails at Stage 0**, it is almost always an authentication issue. See [Troubleshooting](./TROUBLESHOOTING.md) for fixes.
+> **If the pipeline fails at Stage 0**, the most likely cause is an invalid or expired API key / token. First, run `./pre-check.sh api` to confirm whether your credentials are valid. If the check fails, re-acquire your tokens and update `.env`. See [Troubleshooting](./TROUBLESHOOTING.md) for fixes.
 
 ## Output Structure
 

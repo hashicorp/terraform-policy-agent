@@ -252,6 +252,12 @@ tfpac-run  tfpac-setup
 
 This section demonstrates the actual tfpac-setup Skill execution using OpenCode. Since this is an AI Agent, you may notice minor differences between the screenshots and your execution results, but the overall flow is expected to be the same.
 
+> **NOTE 1:** After each step, you will be prompted with **Proceed** or **Back** as shown in the screenshots below. Select **Back** if you want to return and make corrections. In most cases where no correction is needed, select **Proceed** to continue.
+
+![Proceed back](photo/setup/proceed_back.png)
+
+> **NOTE 2:** Intermediate results are saved to a file called `.env.tmp` as you progress through each step. At the end, the actual `.env` file used for execution is generated from it.
+
 ### Step 8: Execute the /skills command
 
 
@@ -270,6 +276,7 @@ Type `/skills` in your coding agent to view available skills.
 Choose `tfpac-setup` from the list of available skills to start the interactive environment setup wizard.
 
 > **Note:** `customize-opencode` may appear at the top of the skills list — ignore it. It is unrelated to this product.
+
 
 ### Step 10: Confirm tfpac-setup execution
 
@@ -297,13 +304,13 @@ Here, select "2. Local Mode" to use the `data/input` directory that you copied i
 
 ![Terraform Binary](photo/setup/(6)terraform_binary.png)
 
-Select **1. Yes** to have the wizard automatically download and configure the correct Terraform binary for your architecture.
+Select **2. No, download it** to have the wizard automatically download and configure the correct Terraform binary for your architecture.
 
 ### Step 14: Configure TFPolicy binary path
 
 ![TFPolicy Binary](photo/setup/(7)tfpolicy_binary.png)
 
-Select **1. Yes** to have the wizard automatically download and configure the correct TFPolicy binary for your architecture.
+Select **2. No, download it** to have the wizard automatically download and configure the correct TFPolicy binary for your architecture.
 
 ### Step 15: Select authentication provider
 
