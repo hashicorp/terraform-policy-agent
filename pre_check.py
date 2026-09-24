@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright IBM Corp. 2026
+
 import json
 import os
 import re
@@ -8,6 +10,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Optional, Tuple
 
 
 def strip_inline_comment(value: str) -> str:
@@ -183,9 +186,10 @@ def find_terraform_pac_agent_image(docker_cli: str = "docker") -> dict:
         return {"found": False, "images": []}
 
 
-def get_binary_arch(binary_path: str) -> tuple[str | None, str | None]:
+def get_binary_arch_os(binary_path: str) -> Tuple[Optional[str], Optional[str]]:
     """Get architecture and OS of a binary via `file -b`.
-    Returns (arch, os) where arch is 'arm64'/'amd64'/None and os is 'linux'/'macos'/None."""
+    Returns (arch, os) where arch is 'arm64'/'amd64'/'arm'/'386'/'s390x'/None
+    and os is 'linux'/'macos'/'freebsd'/'openbsd'/'netbsd'/'solaris'/'windows'/None."""
     import shutil
     if not shutil.which("file"):
         return None, None
@@ -200,14 +204,32 @@ def get_binary_arch(binary_path: str) -> tuple[str | None, str | None]:
         if result.returncode != 0:
             return None, None
         output = result.stdout.lower()
+        # arch — order matters: check 64-bit variants before 32-bit
         if "aarch64" in output or "arm64" in output:
             arch = "arm64"
         elif "x86-64" in output or "x86_64" in output:
             arch = "amd64"
+        elif "s390" in output or "ibm s/390" in output:
+            arch = "s390x"
+        elif "arm" in output:
+            arch = "arm"
+        elif "intel 80386" in output or "i386" in output:
+            arch = "386"
         else:
             arch = None
+        # os — check specific BSDs/Solaris/Windows before generic ELF→linux
         if "mach-o" in output:
             os_name = "macos"
+        elif "for ms windows" in output or "pe32" in output:
+            os_name = "windows"
+        elif "freebsd" in output:
+            os_name = "freebsd"
+        elif "openbsd" in output:
+            os_name = "openbsd"
+        elif "netbsd" in output:
+            os_name = "netbsd"
+        elif "ld.so.1" in output or "solaris" in output:
+            os_name = "solaris"
         elif "elf" in output:
             os_name = "linux"
         else:
@@ -217,9 +239,10 @@ def get_binary_arch(binary_path: str) -> tuple[str | None, str | None]:
         return None, None
 
 
-def get_image_arch(image: str, docker_cli: str = "docker") -> tuple[str | None, str | None]:
+def get_image_arch_os(image: str, docker_cli: str = "docker") -> Tuple[Optional[str], Optional[str]]:
     """Get architecture and OS of a container image via `<cli> image inspect`.
-    Returns (arch, os) where arch is e.g. 'arm64'/'amd64'/None and os is 'linux'/'macos'/None."""
+    Returns (arch, os) where arch is 'arm64'/'amd64'/'arm'/'386'/'s390x'/None
+    and os is 'linux'/'macos'/'windows'/'freebsd'/'openbsd'/'netbsd'/'solaris'/None."""
     try:
         result = subprocess.run(
             [docker_cli, "image", "inspect", image, "--format", "{{.Architecture}}|{{.Os}}"],
@@ -231,17 +254,136 @@ def get_image_arch(image: str, docker_cli: str = "docker") -> tuple[str | None, 
         if result.returncode != 0:
             return None, None
         parts = result.stdout.strip().split("|")
-        arch = parts[0] if parts[0] else None
-        raw_os = parts[1] if len(parts) > 1 and parts[1] else None
-        if raw_os == "linux":
-            os_name = "linux"
-        elif raw_os in ("darwin", "macos"):
+        raw_arch = parts[0].strip() if parts[0].strip() else None
+        raw_os   = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+
+        # arch — Docker inspect returns GOARCH values directly
+        if raw_arch in ("arm64", "aarch64"):
+            arch = "arm64"
+        elif raw_arch == "amd64":
+            arch = "amd64"
+        elif raw_arch == "arm":
+            arch = "arm"
+        elif raw_arch == "386":
+            arch = "386"
+        elif raw_arch == "s390x":
+            arch = "s390x"
+        else:
+            arch = raw_arch or None
+
+        # os — Docker inspect returns GOOS values; normalise darwin→macos
+        if raw_os in ("darwin", "macos"):
             os_name = "macos"
+        elif raw_os == "linux":
+            os_name = "linux"
+        elif raw_os == "windows":
+            os_name = "windows"
+        elif raw_os == "freebsd":
+            os_name = "freebsd"
+        elif raw_os == "openbsd":
+            os_name = "openbsd"
+        elif raw_os == "netbsd":
+            os_name = "netbsd"
+        elif raw_os == "solaris":
+            os_name = "solaris"
         else:
             os_name = raw_os or None
+
         return arch, os_name
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None, None
+
+
+def check_api_credentials(env: dict) -> dict:
+    provider = env.get("AUTH_PROVIDER", "litellm").lower()
+
+    if provider == "litellm":
+        base_url = (env.get("MODEL_BASE_URL") or "").rstrip("/")
+        api_key = env.get("MODEL_API_KEY", "")
+        model_name = env.get("MODEL_NAME", "")
+        if not base_url:
+            return {"provider": provider, "ok": False, "error": "MODEL_BASE_URL is not set"}
+        if not api_key:
+            return {"provider": provider, "ok": False, "error": "MODEL_API_KEY is not set"}
+        if not model_name:
+            return {"provider": provider, "ok": False, "error": "MODEL_NAME is not set"}
+        url = f"{base_url}/chat/completions"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"model": model_name, "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 100}).encode(),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp.read()
+            return {"provider": provider, "ok": True}
+        except Exception as e:
+            return {"provider": provider, "ok": False, "error": str(e)}
+
+    elif provider == "github-copilot":
+        access_token = env.get("GITHUB_COPILOT_ACCESS_TOKEN", "")
+        model_name = env.get("MODEL_NAME", "claude-sonnet-4.6")
+        if not access_token:
+            return {"provider": provider, "ok": False, "error": "GITHUB_COPILOT_ACCESS_TOKEN is not set"}
+        if not model_name:
+            return {"provider": provider, "ok": False, "error": "MODEL_NAME is not set"}
+        # Step 1: Exchange for a short-lived Copilot token
+        req = urllib.request.Request(
+            "https://api.github.com/copilot_internal/v2/token",
+            headers={"Authorization": f"token {access_token}", "Accept": "application/json", "Editor-Version": "pre_check/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode())
+            copilot_token = data.get("token")
+            if not copilot_token:
+                return {"provider": provider, "ok": False, "error": f"No token in response: {data}"}
+            # Step 2: LLM call via Copilot chat/completions
+            ping_req = urllib.request.Request(
+                "https://api.githubcopilot.com/chat/completions",
+                data=json.dumps({"model": model_name, "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 1}).encode(),
+                headers={"Authorization": f"Bearer {copilot_token}", "Content-Type": "application/json", "Accept": "application/json", "Copilot-Integration-Id": "vscode-chat", "Editor-Version": "pre_check/1.0"},
+                method="POST",
+            )
+            with urllib.request.urlopen(ping_req, timeout=15) as r:
+                resp.read()
+            return {"provider": provider, "ok": True}
+        except Exception as e:
+            return {"provider": provider, "ok": False, "error": str(e)}
+
+    elif provider == "amazon-bedrock":
+        bearer_token = env.get("MODEL_API_KEY", "")
+        model_name = env.get("MODEL_NAME", "")
+        if not bearer_token:
+            return {"provider": provider, "ok": False, "error": "MODEL_API_KEY (Bedrock bearer token) is not set"}
+        if not model_name:
+            return {"provider": provider, "ok": False, "error": "MODEL_NAME is not set"}
+        url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_name}/converse"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}).encode(),
+            headers={"Authorization": f"Bearer {bearer_token}", "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp.read()
+            return {"provider": provider, "ok": True}
+        except Exception as e:
+            return {"provider": provider, "ok": False, "error": str(e)}
+
+    else:
+        return {"provider": provider, "ok": False, "error": f"Unknown AUTH_PROVIDER: {provider!r}"}
+
+
+# Characters that break shell scripts and Docker volume mounts
+_PATH_UNSAFE_CHARS = " \t()[]{},'\"!;#$&*?<>|~`"
+
+
+def check_working_directory_path(cwd: Path) -> bool:
+    path_str = str(cwd)
+    return not any(c in path_str for c in _PATH_UNSAFE_CHARS)
 
 
 def print_interactive_report(result: dict) -> None:
@@ -277,8 +419,8 @@ def print_interactive_report(result: dict) -> None:
         
         if has_conflict:
             print(f"   🔴 env        : Environment Variables - Authentication provider conflict")
-            print(f"                   Both LiteLLM and GitHub Copilot are configured")
-            print(f"                   Please choose only ONE authentication provider")
+            print(f"                   Multiple providers are configured (LiteLLM / GitHub Copilot / Amazon Bedrock)")
+            print(f"                   Please choose only ONE in .env")
         elif missing_keys:
             print(f"   🔴 env        : Environment Variables - Missing {len(missing_keys)} keys")
             for key in missing_keys:
@@ -385,7 +527,7 @@ def print_interactive_report(result: dict) -> None:
             print(f"                           -e TRANSPORT_MODE=streamable-http \\")
             print(f"                           -e TRANSPORT_HOST=0.0.0.0 \\")
             print(f"                           -e MCP_SESSION_MODE=stateless \\")
-            print(f"                           hashicorp/terraform-mcp-server:0.3.3")
+            print(f"                           hashicorp/terraform-mcp-server:1.1.0")
     
     # 7. Policy Database (subcommand: database)
     if "policy_db_configured" in checks:
@@ -433,6 +575,37 @@ def print_interactive_report(result: dict) -> None:
             status_text = "EXTERNAL_REPO_DIR is set (external mode)"
         print(f"   {status} local     : Local Mode - {status_text}")
 
+    # 10. External mode (subcommand: external)
+    if "external_repo_dir_set" in checks:
+        ext_set = checks["external_repo_dir_set"]
+        ext_exists = checks.get("external_repo_dir_exists", False)
+        ext_ok = ext_set and ext_exists
+        status = "🟢" if ext_ok else "🔴"
+        if not ext_set:
+            status_text = "EXTERNAL_REPO_DIR is not set"
+        elif not ext_exists:
+            status_text = f"Directory not found: {checks.get('external_repo_dir', '')}"
+        else:
+            status_text = f"Set and exists: {checks.get('external_repo_dir', '')}"
+        print(f"   {status} external  : External Mode - {status_text}")
+
+    # 0. Working directory (subcommand: workdir)
+    if "workdir_ok" in checks:
+        status = "🟢" if checks["workdir_ok"] else "🔴"
+        status_text = "OK" if checks["workdir_ok"] else "Contains unsafe characters"
+        print(f"   {status} workdir   : Working Directory - {status_text}")
+        print(f"                   Path: {checks['workdir_path']}")
+
+    # 11. API credentials (subcommand: api)
+    if "api_credentials" in checks:
+        api = checks["api_credentials"]
+        status = "🟢" if api.get("ok") else "🔴"
+        provider_label = api.get("provider", "unknown")
+        status_text = "Valid" if api.get("ok") else "Invalid"
+        print(f"   {status} api       : API Credentials ({provider_label}) - {status_text}")
+        if not api.get("ok") and "error" in api:
+            print(f"                   Error: {api['error']}")
+
     print()
     
     # Errors summary
@@ -459,45 +632,6 @@ def print_interactive_report(result: dict) -> None:
     print("=" * 70 + "\n")
 
 
-def summarize_output(output_dir: Path) -> dict:
-    summary = {
-        "output_dir_exists": output_dir.exists(),
-        "summary_md_exists": (output_dir / "summary.md").exists(),
-        "summary_json_exists": (output_dir / "summary.json").exists(),
-        "stage0_log_exists": (output_dir / "stage0_extraction.log").exists(),
-        "stage3_log_exists": (output_dir / "stage3_summary.log").exists(),
-        "goal_stage1_logs": sorted(str(p) for p in output_dir.glob("goals/*_stage1*.log")),
-        "policy_stage2_logs": sorted(str(p) for p in output_dir.glob("*/stage2_generation*.log")),
-        "policy_dirs": sorted(
-            p.name for p in output_dir.iterdir()
-            if p.is_dir() and p.name != "goals"
-        ) if output_dir.exists() else [],
-        "error_hits": [],
-    }
-
-    patterns = ["ERROR", "Error", "failed", "timed out", "Traceback"]
-    candidate_logs = []
-    if output_dir.exists():
-        candidate_logs.extend(output_dir.glob("stage*.log"))
-        candidate_logs.extend(output_dir.glob("goals/*.log"))
-        candidate_logs.extend(output_dir.glob("*/stage2_generation*.log"))
-
-    for log_file in candidate_logs:
-        try:
-            text = log_file.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        for pattern in patterns:
-            if pattern in text:
-                summary["error_hits"].append({
-                    "file": str(log_file),
-                    "pattern": pattern,
-                })
-                break
-
-    return summary
-
-
 def main() -> int:
     repo_root = Path.cwd()
     env_path = repo_root / ".env"
@@ -512,21 +646,17 @@ def main() -> int:
     # Parse command line arguments
     output_format = "interactive"  # default
     check_targets = []  # list of checks to run
-    
-    valid_subcommands = ["all", "docker", "env", "binaries", "input", "image", "mcp", "database", "output", "local"]
+    use_tmp = False  # --tmp flag: read .env.tmp instead of .env
+
+    valid_subcommands = ["all", "docker", "env", "binaries", "input", "image", "mcp", "database", "output", "local", "external", "api", "workdir"]
     
     if len(sys.argv) > 1:
-        if sys.argv[1] == "--summarize-output":
-            env = parse_env_file(env_path) if env_path.exists() else {}
-            data_dir = resolve_path(repo_root, env.get("DATA_DIR", "./data"))
-            output_dir = data_dir / env.get("OUTPUT_DIR", "output")
-            print(json.dumps(summarize_output(output_dir), indent=2))
-            return 0
-        elif sys.argv[1] in ["--help", "-h"]:
-            print("Usage: pre_check.py [SUBCOMMAND...] [--json]")
+        if sys.argv[1] in ["--help", "-h"]:
+            print("Usage: pre_check.py [SUBCOMMAND...] [--json] [--tmp]")
             print()
             print("Subcommands (can specify multiple):")
             print("  all                 Run all checks (default)")
+            print("  workdir             Check working directory path for spaces / unsafe characters")
             print("  docker              Check container engine (docker or podman)")
             print("  env                 Check environment variables")
             print("  binaries            Check terraform/tfpolicy binaries")
@@ -537,9 +667,12 @@ def main() -> int:
             print("  output              Check OUTPUT_DIR is empty")
             print("  local               Require local mode: fail if EXTERNAL_REPO_DIR is set")
             print("                      (`all` only reports the mode, it does not require it)")
+            print("  external            Check EXTERNAL_REPO_DIR is set and directory exists")
+            print("  api                 Validate API credentials via lightweight ping")
             print()
             print("Options:")
             print("  --json              Output in JSON format (for automation)")
+            print("  --tmp               Read .env.tmp instead of .env")
             print("  --summarize-output  Summarize pipeline output logs")
             print("  --help, -h          Show this help message")
             print()
@@ -549,12 +682,16 @@ def main() -> int:
             print("  pre_check.py docker                    # Check container engine only")
             print("  pre_check.py docker binaries mcp       # Check multiple items")
             print("  pre_check.py mcp --json                # Check MCP server (JSON)")
+            print("  pre_check.py --tmp mcp                 # Check MCP server using .env.tmp")
+            print("  pre_check.py workdir                   # Check working directory path only")
             return 0
         
         # Parse arguments
         for arg in sys.argv[1:]:
             if arg == "--json":
                 output_format = "json"
+            elif arg == "--tmp":
+                use_tmp = True
             elif arg in valid_subcommands:
                 check_targets.append(arg)
     
@@ -566,6 +703,15 @@ def main() -> int:
     if "all" in check_targets:
         check_targets = ["all"]
 
+    # Resolve which env file to use
+    if use_tmp:
+        env_path = repo_root / ".env.tmp"
+        # Re-resolve docker_cli from .env.tmp if it exists
+        if env_path.exists():
+            tmp_env = parse_env_file(env_path)
+            docker_cli = resolve_docker_cli(tmp_env)
+            docker_run_extra_args = resolve_docker_run_extra_args(tmp_env)
+
     result = {
         "ok": True,
         "docker_cli": docker_cli,
@@ -573,6 +719,26 @@ def main() -> int:
         "errors": [],
         "warnings": [],
     }
+
+    # Working directory check (runs first, no .env needed)
+    if "all" in check_targets or "workdir" in check_targets:
+        wd_ok = check_working_directory_path(repo_root)
+        result["checks"]["workdir_ok"] = wd_ok
+        result["checks"]["workdir_path"] = str(repo_root)
+        if not wd_ok:
+            result["ok"] = False
+            result["errors"].append(
+                f"Working directory path contains unsafe characters: {repo_root}\n"
+                "   Fix: move project to a path with only letters, numbers, hyphens, "
+                "and underscores, e.g. ~/terraform-policy-agent"
+            )
+
+    if check_targets == ["workdir"]:
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print_interactive_report(result)
+        return 0 if result["ok"] else 1
 
     # Check the container engine first (required for most checks)
     if "all" in check_targets or "docker" in check_targets:
@@ -599,10 +765,11 @@ def main() -> int:
             print_interactive_report(result)
         return 0 if result["ok"] else 1
 
-    # Load .env for other checks
+    # Load env file for other checks
+    env_file_name = env_path.name  # ".env" or ".env.tmp"
     if not env_path.exists():
         result["ok"] = False
-        result["errors"].append(".env not found")
+        result["errors"].append(f"{env_file_name} not found")
         if output_format == "json":
             print(json.dumps(result, indent=2))
         else:
@@ -614,20 +781,34 @@ def main() -> int:
 
     # Environment variables check
     if "all" in check_targets or "env" in check_targets:
-        required = ["MODEL_NAME", "IMAGE_NAME", "IMAGE_TAG", "DATA_DIR", "INPUT_DIR", "INPUT_FILE", "OUTPUT_DIR", "TERRAFORM_BINARY_PATH", "TFPOLICY_BINARY_PATH"]
+        required = ["MODEL_NAME", "IMAGE_NAME", "IMAGE_TAG", "DATA_DIR", "TERRAFORM_BINARY_PATH", "TFPOLICY_BINARY_PATH"]
         
         # Check for conflicting auth providers
-        has_litellm = env.get("MODEL_BASE_URL") or env.get("MODEL_API_KEY")
-        has_github_copilot = env.get("GITHUB_COPILOT_ACCESS_TOKEN")
-        
-        result["checks"]["auth_provider_conflict"] = has_litellm and has_github_copilot
-        
-        if has_litellm and has_github_copilot:
+        # Detect which providers have credentials present
+        has_litellm = bool(env.get("MODEL_BASE_URL") or (auth_provider == "litellm" and env.get("MODEL_API_KEY")))
+        has_github_copilot = bool(env.get("GITHUB_COPILOT_ACCESS_TOKEN"))
+        has_bedrock = auth_provider == "amazon-bedrock"
+
+        active_providers = [p for p, active in [
+            ("LiteLLM",        has_litellm),
+            ("GitHub Copilot", has_github_copilot),
+            ("Amazon Bedrock", has_bedrock),
+        ] if active]
+
+        auth_conflict = len(active_providers) > 1
+        result["checks"]["auth_provider_conflict"] = auth_conflict
+
+        if auth_conflict:
             result["ok"] = False
-            result["errors"].append("Conflicting authentication providers: both LiteLLM and GitHub Copilot are configured. Please choose only ONE.")
+            result["errors"].append(
+                f"Conflicting authentication providers: {' and '.join(active_providers)} are configured. "
+                "Please choose only ONE in .env."
+            )
         
         if auth_provider == "github-copilot":
             required.extend(["GITHUB_COPILOT_ACCESS_TOKEN"])
+        elif auth_provider == "amazon-bedrock":
+            required.extend(["MODEL_API_KEY"])
         else:
             required.extend(["MODEL_BASE_URL", "MODEL_API_KEY"])
 
@@ -656,15 +837,15 @@ def main() -> int:
     # Binaries check
     if "all" in check_targets or "binaries" in check_targets:
         image = f"{env.get('IMAGE_NAME', '')}:{env.get('IMAGE_TAG', '')}"
-        image_arch, image_os = get_image_arch(image, docker_cli) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else (None, None)
+        image_arch, image_os = get_image_arch_os(image, docker_cli) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else (None, None)
 
         tf_exists = terraform_path.exists()
-        tf_arch, tf_os = get_binary_arch(str(terraform_path)) if tf_exists else (None, None)
+        tf_arch, tf_os = get_binary_arch_os(str(terraform_path)) if tf_exists else (None, None)
         tf_arch_match = (tf_arch == image_arch) if (tf_arch and image_arch) else None
         tf_os_match = (tf_os == image_os) if (tf_os and image_os) else None
 
         tfp_exists = tfpolicy_path.exists()
-        tfp_arch, tfp_os = get_binary_arch(str(tfpolicy_path)) if tfp_exists else (None, None)
+        tfp_arch, tfp_os = get_binary_arch_os(str(tfpolicy_path)) if tfp_exists else (None, None)
         tfp_arch_match = (tfp_arch == image_arch) if (tfp_arch and image_arch) else None
         tfp_os_match = (tfp_os == image_os) if (tfp_os and image_os) else None
 
@@ -769,7 +950,7 @@ def main() -> int:
         image = f"{env.get('IMAGE_NAME', '')}:{env.get('IMAGE_TAG', '')}"
         result["checks"]["docker_image"] = image
         result["checks"]["docker_image_exists"] = docker_image_exists(image, docker_cli) if env.get("IMAGE_NAME") and env.get("IMAGE_TAG") else False
-
+        
         if not result["checks"]["docker_image_exists"]:
             if pac_agent_images["found"]:
                 result["warnings"].append(f"Specified image not found: {image}, but other terraform-pac-agent images are available: {', '.join(pac_agent_images['images'][:3])}")
@@ -813,7 +994,7 @@ def main() -> int:
     # # Database check
     # if "all" in check_targets or "database" in check_targets:
     #     policy_db = env.get("POLICY_DB")
-        
+    #
     #     if not policy_db:
     #         result["ok"] = False
     #         result["errors"].append("POLICY_DB environment variable is not set")
@@ -822,12 +1003,12 @@ def main() -> int:
     #     else:
     #         result["checks"]["policy_db_configured"] = True
     #         result["checks"]["policy_db"] = policy_db
-            
+    #
     #         # Check if the database file exists
     #         policy_db_path = resolve_path(repo_root, policy_db)
     #         db_exists = policy_db_path.exists()
     #         result["checks"]["policy_db_exists"] = db_exists
-            
+    #
     #         if not db_exists:
     #             result["ok"] = False
     #             result["errors"].append(f"Policy database file not found: {policy_db}")
@@ -861,27 +1042,63 @@ def main() -> int:
         return 0 if result["ok"] else 1
 
     # Local mode check.
-    #
-    # External mode is a supported (and documented as primary) way to run the agent, so
-    # a set EXTERNAL_REPO_DIR is only an error when the caller explicitly asked about
-    # local mode. For `all` this is reported as information: `run.sh local` forces local
-    # mode regardless of EXTERNAL_REPO_DIR, and `run.sh` with no subcommand picks the
-    # mode from it, so neither value blocks a run.
     if "all" in check_targets or "local" in check_targets:
         external_repo_dir_val = env.get("EXTERNAL_REPO_DIR")
         is_local = not bool(external_repo_dir_val)
         result["checks"]["is_local_mode"] = is_local
-        result["checks"]["local_mode_required"] = "local" in check_targets
-        if not is_local and "local" in check_targets:
+        if not is_local:
             result["ok"] = False
             result["errors"].append(
                 f"EXTERNAL_REPO_DIR is set ({external_repo_dir_val}); "
-                "remove it from .env to use local mode, "
-                "or use `./run.sh local` to force local mode for a single run"
+                "remove it from .env to use local mode "
+                "(using external mode? ignore this)"
             )
 
-    # Early exit for local-only check
-    if check_targets == ["local"]:
+        # In local mode, INPUT_DIR / INPUT_FILE / OUTPUT_DIR must be set
+        local_required = ["INPUT_DIR", "INPUT_FILE", "OUTPUT_DIR"]
+        missing_local = [k for k in local_required if not env.get(k)]
+        result["checks"]["missing_local_keys"] = missing_local
+        if missing_local:
+            result["ok"] = False
+            result["errors"].append(
+                f"missing env keys for local mode: {', '.join(missing_local)}"
+            )
+
+
+    # External mode check
+    if "all" in check_targets or "external" in check_targets:
+        external_repo_dir_val = env.get("EXTERNAL_REPO_DIR", "").strip()
+        ext_set = bool(external_repo_dir_val)
+        ext_exists = Path(external_repo_dir_val).exists() if ext_set else False
+        result["checks"]["external_repo_dir_set"] = ext_set
+        result["checks"]["external_repo_dir_exists"] = ext_exists
+        if ext_set:
+            result["checks"]["external_repo_dir"] = external_repo_dir_val
+        if not ext_set:
+            result["ok"] = False
+            result["errors"].append("EXTERNAL_REPO_DIR is not set in .env (using local mode? ignore this)")
+        elif not ext_exists:
+            result["ok"] = False
+            result["errors"].append(f"EXTERNAL_REPO_DIR directory not found: {external_repo_dir_val}")
+
+    # Early exit for external-only check
+    if check_targets == ["external"]:
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print_interactive_report(result)
+        return 0 if result["ok"] else 1
+
+    # API credentials check
+    if "all" in check_targets or "api" in check_targets:
+        api_result = check_api_credentials(env)
+        result["checks"]["api_credentials"] = api_result
+        if not api_result["ok"]:
+            result["ok"] = False
+            result["errors"].append(f"API credential check failed ({api_result['provider']}): {api_result.get('error', 'unknown error')}")
+
+    # Early exit for api-only check
+    if check_targets == ["api"]:
         if output_format == "json":
             print(json.dumps(result, indent=2))
         else:

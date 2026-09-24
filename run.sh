@@ -18,9 +18,11 @@ set -e
 #   (auto)     - Auto-detect based on EXTERNAL_REPO_DIR in .env
 #
 # Global Options:
-#   --help     - Show help message
-#   --version  - Show version (IMAGE_TAG from .env)
-#   --dryrun   - Print commands without executing
+#   --help        - Show help message
+#   --version     - Show version (IMAGE_TAG from .env)
+#   --dryrun      - Print commands without executing
+#   --no-confirm  - Skip pre-run summary and confirmation prompt
+#   --resume      - Resume pipeline from last completed stage (skip completed stages)
 #
 # Examples:
 #   ./run.sh                                    # Auto-detect mode
@@ -86,9 +88,10 @@ SUBCOMMANDS:
     (auto)     Auto-detect mode based on EXTERNAL_REPO_DIR in .env
 
 GLOBAL OPTIONS:
-    --help     Show this help message
-    --version  Show version information
-    --dryrun   Print commands without executing
+    --help        Show this help message
+    --version     Show version information
+    --dryrun      Print commands without executing
+    --no-confirm  Skip pre-run summary and confirmation prompt
 
 AUTO-DETECTION:
     When no subcommand is specified, the script auto-detects the mode:
@@ -276,6 +279,8 @@ export DOCKER_RUN_EXTRA_ARGS="${DOCKER_RUN_EXTRA_ARGS:-}"
 
 # Global flags
 DRYRUN=false
+NO_CONFIRM=false
+RESUME=false
 SHOW_VERSION=false
 
 # Check for global flags first
@@ -295,6 +300,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dryrun)
             DRYRUN=true
+            shift
+            ;;
+        --no-confirm)
+            NO_CONFIRM=true
+            shift
+            ;;
+        --resume)
+            RESUME=true
             shift
             ;;
         *)
@@ -399,9 +412,6 @@ case "$SUBCOMMAND" in
         # Build arguments for run_with_local_preparation.sh
         RUN_ARGS=()
         
-        if [ "$DRYRUN" = true ]; then
-            RUN_ARGS+=("--dryrun")
-        fi
         
         if [ -n "$STEP" ]; then
             # Map step number to skill name
@@ -441,14 +451,69 @@ case "$SUBCOMMAND" in
                 RUN_ARGS+=("--prompt" "$PROMPT")
             fi
         fi
-        
-        # Delegate to run_with_local_preparation.sh
-        if [ ${#RUN_ARGS[@]} -eq 0 ]; then
-            # No arguments - run full pipeline
-            exec "${SCRIPT_DIR}/run_with_local_preparation.sh"
-        else
-            exec "${SCRIPT_DIR}/run_with_local_preparation.sh" "${RUN_ARGS[@]}"
+
+        # ============================================================================
+        # Pre-run Confirmation
+        # ============================================================================
+
+        if [ "$DRYRUN" = false ] && [ "$NO_CONFIRM" = false ]; then
+            # Run pre-check (skip if resuming — already passed on first run)
+            if [ "$RESUME" = false ]; then
+                "${SCRIPT_DIR}/pre-check.sh" docker env binaries image mcp input local api
+            fi
+
+            # Show summary and ask for confirmation
+            echo "=========================================="
+            echo "  Pre-run Summary"
+            echo "=========================================="
+            INPUT_FILE_PATH="${DATA_DIR:-data}/${INPUT_DIR:-input}/${INPUT_FILE:-policy_goal.txt}"
+            echo "  Input File (local mode)  : ${INPUT_FILE_PATH}"
+            echo "  Output   : ${DATA_DIR:-data}/${OUTPUT_DIR:-output}"
+            echo "  Model    : ${AUTH_PROVIDER:-litellm} / ${MODEL_NAME:-}"
+            echo "=========================================="
+            echo ""
+
+            # Show workflow plan
+            if [[ " ${RUN_ARGS[*]} " == *" step0-extraction "* ]]; then
+                echo "  Stage 0: Policy Extraction"
+            elif [[ " ${RUN_ARGS[*]} " == *" step1-requirement "* ]]; then
+                echo "  Stage 1: Requirement Generation"
+            elif [[ " ${RUN_ARGS[*]} " == *" step2-generation "* ]]; then
+                echo "  Stage 2: Policy Generation"
+            elif [[ " ${RUN_ARGS[*]} " == *" step3-summary "* ]]; then
+                echo "  Stage 3: Summary Generation"
+            else
+                echo "=========================================="
+                echo "Running Full Pipeline"
+                echo "=========================================="
+                if [ "$RESUME" = true ]; then
+                    echo "This will execute all 4 stages sequentially (resuming from latest checkpoint):"
+                else
+                    echo "This will execute all 4 stages sequentially (from scratch):"
+                fi
+                echo "  Stage 0: Policy Extraction"
+                echo "  Stage 1: Requirement Generation"
+                echo "  Stage 2: Policy Generation"
+                echo "  Stage 3: Summary Generation"
+            fi
+            echo ""
+
+            read -r -p "Continue? [Y/n] " _CONFIRM
+            case "${_CONFIRM:-N}" in
+                [Yy]) ;;
+                *) echo "Aborted."; exit 0 ;;
+            esac
+            echo ""
         fi
+
+        # Delegate to run_with_local_preparation.sh
+        # Build prefix flags: --dryrun first, then --no-confirm, then --resume
+        EXEC_ARGS=()
+        [ "$DRYRUN" = true ]      && EXEC_ARGS+=("--dryrun")
+        [ "$NO_CONFIRM" = true ]  && EXEC_ARGS+=("--no-confirm")
+        [ "$RESUME" = true ]      && EXEC_ARGS+=("--resume")
+        EXEC_ARGS+=("${RUN_ARGS[@]}")
+        exec "${SCRIPT_DIR}/run_with_local_preparation.sh" "${EXEC_ARGS[@]}"
         ;;
         
     external)
@@ -503,10 +568,67 @@ case "$SUBCOMMAND" in
         if [ -n "$MOCK_OUTPUT" ]; then
             RUN_ARGS+=("--mock-output" "$MOCK_OUTPUT")
         fi
-        
-        # Note: --dryrun is not supported in run_with_external_repo.sh yet
-        # Silently ignore it for now
-        
+
+        if [ "$RESUME" = true ]; then
+            RUN_ARGS+=("--resume")
+        fi
+
+        if [ "$DRYRUN" = true ]; then
+            RUN_ARGS+=("--dryrun")
+        fi
+
+        # ============================================================================
+        # Pre-run Confirmation
+        # ============================================================================
+
+        if [ "$DRYRUN" = false ] && [ "$NO_CONFIRM" = false ]; then
+            # Run pre-check (skip if resuming — already passed on first run)
+            if [ "$RESUME" = false ]; then
+                "${SCRIPT_DIR}/pre-check.sh" docker env binaries image mcp api
+            fi
+
+            # Show summary and ask for confirmation
+            echo "=========================================="
+            echo "  Pre-run Summary"
+            echo "=========================================="
+            echo "  Input Policy Directory (external mode)  : ${EXTERNAL_REPO_DIR:-}"
+            echo "  Output   : ${DATA_DIR:-data}/output-{timestamp}  (created at runtime)"
+            if [ -z "$PHASE" ] || [ "$PHASE" = "generate" ]; then
+                echo "  Model    : ${AUTH_PROVIDER:-litellm} / ${MODEL_NAME:-}"
+                echo "  Image    : ${IMAGE_NAME:-terraform-pac-agent-skills}:${IMAGE_TAG:-latest}"
+            fi
+            echo "=========================================="
+            echo ""
+
+            # Show workflow plan
+            if [ -n "$PHASE" ]; then
+                if [ "$PHASE" = "generate" ] && [ "$RESUME" = true ]; then
+                    echo "  Phase: generate only (resuming from latest checkpoint)"
+                else
+                    echo "  Phase: ${PHASE} only"
+                fi
+            else
+                echo "=========================================="
+                echo "Running Full Pipeline (external mode)"
+                echo "=========================================="
+                echo "  Phase 1: Preprocess"
+                if [ "$RESUME" = true ]; then
+                    echo "  Phase 2: Generate  (resuming from latest checkpoint)"
+                else
+                    echo "  Phase 2: Generate"
+                fi
+                echo "  Phase 3: Postprocess"
+            fi
+            echo ""
+
+            read -r -p "Continue? [Y/n] " _CONFIRM
+            case "${_CONFIRM:-N}" in
+                [Yy]) ;;
+                *) echo "Aborted."; exit 0 ;;
+            esac
+            echo ""
+        fi
+
         # Delegate to run_with_external_repo.sh
         exec "${SCRIPT_DIR}/run_with_external_repo.sh" "${RUN_ARGS[@]}"
         ;;

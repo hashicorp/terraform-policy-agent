@@ -19,7 +19,9 @@ Arguments:
 """
 
 import os
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -36,6 +38,83 @@ def read_template(script_dir: Path) -> str:
     except Exception as e:
         print(f"ERROR: Failed to read template file: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def parse_source_from_report(hcl_file_path: str) -> str:
+    """
+    Parse Input Source from report.md in the same directory as the HCL file.
+
+    Supports two formats:
+        ## Input Source
+        ./data/input/sentinels/xxx.sentinel
+
+        - **Input Source**: ./data/input/sentinels/xxx.sentinel
+    """
+    report_path = Path(hcl_file_path).parent / "report.md"
+    if not report_path.exists():
+        return "unknown"
+
+    try:
+        with open(report_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        for i, line in enumerate(lines):
+            # Format 1: - **Input Source**: <path>
+            match = re.search(r'\*\*Input Source\*\*:\s*(\S+)', line)
+            if match:
+                return match.group(1)
+            # Format 2: ## Input Source\n<path>
+            if re.match(r'##\s+Input Source', line.strip()):
+                if i + 1 < len(lines):
+                    candidate = lines[i + 1].strip()
+                    if candidate:
+                        return candidate
+            # Format 3: Input Source: <path>
+            match = re.search(r'Input Source\s*:\s*(\S+)', line)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+
+    return "unknown"
+
+
+def read_env_value(env_path: Path, key: str) -> str:
+    """Read a single value from a .env file by key. Returns 'unknown' if not found."""
+    if not env_path.exists():
+        return "unknown"
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return "unknown"
+
+
+def build_footer(file_path: str, base_footer: str, time: str, provider: str, model: str) -> str:
+    """
+    Build a dynamic footer with generation timestamp, source file info, and LLM metadata.
+
+    Args:
+        file_path:   Path to the HCL file being processed.
+        base_footer: Raw content from file_footer.hcl.template.
+        time:        Pre-generated UTC timestamp string.
+        provider:    AUTH_PROVIDER value from .env.
+        model:       MODEL_NAME value from .env.
+
+    Returns:
+        Footer string with timestamp, source, and LLM info appended.
+    """
+    source = parse_source_from_report(file_path)
+    return (
+        f"{base_footer.rstrip()}\n"
+        f"# Generated at: {time}\n"
+        f"# Source: {source}\n"
+        f"# LLM: {provider} / {model}\n"
+    )
 
 
 def find_hcl_files(directory: str) -> list:
@@ -106,9 +185,6 @@ def main():
     # Get script directory
     script_dir = Path(__file__).parent
     
-    # Read template
-    footer = read_template(script_dir)
-    
     # Find all HCL files
     hcl_files = find_hcl_files(directory)
     
@@ -119,8 +195,13 @@ def main():
     # Process each file
     appended_count = 0
     skipped_count = 0
-    
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    env_path = script_dir / ".env"
+    provider = read_env_value(env_path, "AUTH_PROVIDER")
+    model = read_env_value(env_path, "MODEL_NAME")
+
     for file_path in hcl_files:
+        footer = build_footer(file_path, read_template(script_dir), generated_at, provider, model)
         if append_footer_to_file(file_path, footer):
             print(f"✓ Appended footer to: {file_path}")
             appended_count += 1
