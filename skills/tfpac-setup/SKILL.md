@@ -122,16 +122,16 @@ sufficient — all agent scripts (`run.sh`, `stop.sh`, `pre-check.sh`) read it f
 **Step 1b: Container Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended container image version?"**
-- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1`
+- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31`
 - Default: Yes
 
 If **Yes** (use recommended version):
 - Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.30-rc1"
+- Set `IMAGE_TAG`: "0.0.31"
 
 If **No** (custom version):
 - Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.30-rc1")
+- Ask for `IMAGE_TAG` (default: "0.0.31")
 
 **Check if image exists locally:**
 ```bash
@@ -565,7 +565,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command** (replace `[DOCKER_CLI]` with the CLI chosen in Step 1a)
    ```bash
    [DOCKER_CLI] run --rm -it --entrypoint "" \
-     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.30-rc1 \
+     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
