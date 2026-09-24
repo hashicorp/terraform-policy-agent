@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [0.0.30] - 2026-??-??
+## [0.0.31] - 2026-??-??
 
 ### Added
 - ???
@@ -17,7 +17,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [0.0.29] - 2025-??-??
+## [0.0.30] - 2025-??-??
 
 ### Added
 - ???
