@@ -1,7 +1,23 @@
 ---
 name: tfpac-run
-description: Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
+description: Run policy conversion pipeline (run after setup). Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
 ---
+
+# Single-policy mode
+
+If `/tfpac-run --policy <name>` is called, or the user passes `--policy <name>`:
+
+Set `SINGLE_POLICY_MODE=true` and `POLICY_NAME=<name>`.
+
+In Step 3 (Run Pipeline), instead of the normal one-shot command, execute step by step as described in run-pipeline.md under "Single-policy mode".
+
+# Dryrun mode
+
+If `/tfpac-run --dryrun` is called, or the user passes `--dryrun`:
+
+1. Tell the user: "This is a dry run. Only pre-execution checks will be performed — the pipeline will not start."
+2. Execute Step 1 (Workflow selection) and Step 2 (Prerequisite check) only.
+3. After the prerequisite check completes, stop and do not proceed to pipeline execution.
 
 # ⚠️ IMPORTANT NOTE
 
@@ -79,12 +95,12 @@ Run the precheck script based on the selected workflow:
 
 **For `conversion_local` workflow:**
 ```bash
-./pre-check.sh docker env binaries image mcp input local
+./pre-check.sh docker env binaries image mcp input local api
 ```
 
 **For `conversion_external` workflow:**
 ```bash
-./pre-check.sh docker env binaries image mcp
+./pre-check.sh docker env binaries image mcp external api
 ```
 
 **NOTE:** `docker` in the command above is the name of the container-engine check, not the CLI itself. Keep it as `docker` even when `DOCKER_CLI=podman` in `.env` — the script reads `DOCKER_CLI` on its own and reports the engine it actually probed.
@@ -108,6 +124,7 @@ Review the error messages and provide concise guidance. Common issues and fixes:
 - **MCP server not available** → Start MCP server with: `<DOCKER_CLI> run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:1.1.0` (the `pre-check.sh` report already prints this line with the configured CLI substituted)
 - **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
 - **OUTPUT_DIR not empty** → Delete its contents or set a new OUTPUT_DIR in `.env` before running the pipeline
+- **API credentials invalid** → Re-enter correct API key, token, or model name in `.env`
 
 **Only proceed to Step 3 if status shows `✅ Status: READY`.**
 

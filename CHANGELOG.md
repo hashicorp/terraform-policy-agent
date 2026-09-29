@@ -1,0 +1,31 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+---
+
+## [0.0.31] - 2026-??-??
+
+### Added
+- ???
+
+### Changed
+- ???
+
+### Fixed
+- ???
+
+---
+
+## [0.0.30] - 2025-??-??
+
+### Added
+- ???
+
+### Changed
+- ???
+
+### Fixed
+- ???
+
+---

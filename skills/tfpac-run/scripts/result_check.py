@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Copyright IBM Corp. 2026
-
 import argparse
 import json
 import os
@@ -27,6 +25,7 @@ def strip_inline_comment(value: str) -> str:
         elif ch == "#" and not in_single and not in_double and i > 0 and value[i - 1] in " \t":
             return value[:i]
     return value
+
 
 
 def parse_env_file(path: Path) -> dict:

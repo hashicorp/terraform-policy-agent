@@ -26,28 +26,40 @@ The Terraform Policy Agent is a tool that automatically converts Sentinel polici
 2. Next, use the [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill) to create the `.env` configuration file
 3. Finally, use the [Run (Using tfpac-run Skill)](#run-using-tfpac-run-skill) to execute the Terraform Policy Agent
 
-**Time to complete:** Approximately 30 minutes for first-time setup
+**Time to complete:** Approximately 60–120 minutes for first-time setup
 
 ---
 
 ## Prerequisites
 
+> ⚠️ **All commands in this guide must be run in a terminal — not VS Code's Source Control panel.**
+> Open a terminal in VS Code with **Terminal → New Terminal**, or use your system terminal app.
+> Using the Source Control panel for git commands or any shell commands will cause unexpected behaviour.
+
 **Before using the skills, you must complete the following steps manually:**
 - Step 1: Extract the Package
-- Step 2: Prepare Coding Agent
-- Step 3: Install a Container Engine (Docker or Podman)
-- Step 4: Setup MCP Server
-- Step 5: Prepare Required Binaries
+- Step 2: Prepare Python
+- Step 3: Prepare Coding Agent
+- Step 4: Install a Container Engine (Docker or Podman)
+- Step 5: Setup MCP Server
 - Step 6: Prepare Conversion Data
 - Step 7: Copy Skills to Designated Location
 
 ### Step 1: Extract the Package
 
-Place the received `.tar.gz` file in your working directory, then run:
+> **NOTE:** This package is distributed from the `main` branch of the repository.
 
+Place the received `.tar.gz` file in your working directory. **Recommended location: your home directory (`~/`). Avoid paths with spaces** (e.g., `~/Desktop/My Projects/`) as they can cause shell script failures.
+
+Run each command separately — paste one line, press Enter, wait for it to complete, then proceed to the next:
+
+Extract the package:
 ```bash
-# Extract the package
 tar zxvf terraform-policy-agent.tar.gz
+```
+
+Move into the directory:
+```bash
 cd terraform-policy-agent
 ```
 
@@ -62,13 +74,33 @@ github-copilot-access-setup.png run_with_external_repo.sh
 ```
 
 
-### Step 2: Prepare Coding Agent
+### Step 2: Prepare Python
+
+**Python**:
+
+Python 3.10 or later is required.
+
+```bash
+python3 --version  # Must be 3.10 or later
+```
+
+If Python is missing or outdated, install or update it.
+
+
+### Step 3: Prepare Coding Agent
 
 If you don't have a coding agent yet, install and set up one:
 
 **Option A: OpenCode**
 
 Download: https://opencode.ai/download
+
+Or install via Homebrew (Mac):
+```bash
+brew install opencode
+```
+
+> **Note:** Homebrew will install Node.js and other dependencies (~150 MB total). Allow 2–3 minutes. If your environment has a locked Node.js version, be aware of potential conflicts. If `opencode` is not found after install, open a new terminal window and try again.
 
 Launch:
 ```bash
@@ -84,13 +116,17 @@ Launch:
 copilot
 ```
 
-### Step 3: Install a Container Engine
+> **Note:** If you are using VS Code, the Copilot features you may see inside VS Code (inline completions, chat panel) are **not** the same as the GitHub Copilot CLI above — they are separate tools.
 
-The agent works with either Docker or Podman. If you don't have one yet, install it on
-your system:
+> **Note:** If you see a blue **"Finish Setup"** button in the right panel of your coding agent, this configures the AI assistant for the project — it is not part of the product setup steps in this guide. You can ignore it until after completing all prerequisites.
+
+### Step 4: Install a Container Engine
+
+The agent works with either Docker or Podman. If you don't have one yet, install it on your system:
 
 **Option A: Docker Desktop**
 - Download: https://www.docker.com/products/docker-desktop
+- Or install via Homebrew (Mac): `brew install --cask docker`
 
 **Option B: Rancher Desktop**
 - Download: https://rancherdesktop.io/
@@ -105,24 +141,30 @@ docker --version
 podman --version
 ```
 
-**Podman users:** the agent is told which CLI to use by `DOCKER_CLI` in `.env`. You don't
-have to write it yourself — the setup skill detects the installed CLIs, asks you to pick
-one if both are present ([Step 11](#step-11-container-image-selection)), and writes the
-value for you. That one setting covers `run.sh`, `stop.sh`, `pre-check.sh` and the build
-scripts, so **no `docker` alias is needed**. In the commands below, replace `docker` with
-`podman`.
+**Podman users:** the agent is told which CLI to use by `DOCKER_CLI` in `.env`. You don't have to write it yourself — the setup skill detects the installed CLIs, asks you to pick one if both are present ([Step 11](#step-11-container-image-selection)), and writes the value for you. That one setting covers `run.sh`, `stop.sh`, `pre-check.sh` and the build scripts, so **no `docker` alias is needed**. In the commands below, replace `docker` with `podman`.
+
+**⚠️ Important:** If Docker Desktop prompts you to sign in with a work email on first launch, click **Skip** — sign-in is not required for any operation in this tool. If you see an error saying "Contact your company administrator", ignore it and click Skip — this is not a blocker.
+
+**⚠️ Folder Access:** On first pipeline run, Docker may request permission to access your working directory (e.g., Documents, Desktop). Grant access in **System Settings → Privacy & Security → Files and Folders**. If access is denied, the pipeline may stop silently without any error message.
 
 
-### Step 4: Setup MCP Server
-The agent requires a running MCP (Model Context Protocol) server for Terraform operations.
+### Step 5: Setup MCP Server
+
+The MCP (Model Context Protocol) server provides the Terraform registry lookup and resource documentation that the agent uses during policy generation. Without it, the pipeline cannot resolve Terraform resource schemas.
+
+The agent requires a running MCP server for Terraform operations.
 
 **Pull and run the MCP server:**
 
+Pull the MCP server image (use `podman` instead of `docker` if that is your CLI):
 ```bash
-# Pull the MCP server image (use `podman` instead of `docker` if that is your CLI)
 docker pull docker.io/hashicorp/terraform-mcp-server:1.1.0
+```
 
-# Run the MCP server
+> **Note:** Docker may suggest `docker scout quickview` after the pull — you can safely ignore this.
+
+Run the MCP server:
+```bash
 docker run -d \
   --name terraform-mcp-server \
   -p 8500:8080 \
@@ -133,10 +175,11 @@ docker run -d \
   docker.io/hashicorp/terraform-mcp-server:1.1.0
 ```
 
-**Verify the server is running:**
+**⚠️ Required: Verify the server is running before proceeding:**
 
 ```bash
 docker run --rm -it --entrypoint "" \
+  --add-host=host.docker.internal:host-gateway \
   icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
   curl http://host.docker.internal:8500/health
 ```
@@ -146,22 +189,7 @@ docker run --rm -it --entrypoint "" \
 {"status":"ok","service":"terraform-mcp-server","transport":"streamable-http","endpoint":"/mcp"}
 ```
 
-### Step 5: Prepare Required Binaries
-Download the Linux binaries for Terraform and TFPolicy:
-Terraform Binary - https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
-TFPolicy Binary - https://releases.hashicorp.com/tfpolicy/0.1.0/
-
-**Important:** The binaries must match your host architecture:
-- **M1/M2 Mac:** Use `linux-arm64` binaries
-- **Intel Mac/Linux:** Use `linux-amd64` binaries
-
-Place the binaries in a known location, for example:
-```bash
-mkdir -p ~/terraform-binaries
-# Copy your downloaded binaries here
-```
-
-**Note:** Remember this location, as you will need to specify these paths in [Step 13: Configure Terraform binary path](#step-13-configure-terraform-binary-path) and [Step 14: Configure TFPolicy binary path](#step-14-configure-tfpolicy-binary-path) during the [Agent Setup (Using tfpac-setup Skill)](#agent-setup-using-tfpac-setup-skill).
+> **Note:** If using VS Code or a similar editor, the status bar may show an MCP connection count (for example, `2/2 MCP`). This is unrelated to this project and can be ignored.
 
 ### Step 6: Prepare Conversion Data
 
@@ -171,7 +199,12 @@ Create the data directory structure:
 cp -r sample-data data
 ```
 
-This creates:
+Verify the directory was created correctly:
+```bash
+ls -R data/
+```
+
+This shows:
 ```
 data/
 ├── input/
@@ -188,17 +221,29 @@ You need to copy the skills used by these two executions to their designated loc
 **For OpenCode:**
 
 ```bash
-mkdir -p .opencode/skills
-cp -R skills/tfpac-setup .opencode/skills/
-cp -R skills/tfpac-run .opencode/skills/
+mkdir -p .opencode/skills && \
+cp -R skills/tfpac-setup .opencode/skills/ && \
+cp -R skills/tfpac-run .opencode/skills/ && \
+ls .opencode/skills/
+```
+
+Expected output:
+```
+tfpac-run  tfpac-setup
 ```
 
 **For GitHub Copilot CLI:**
 
 ```bash
-mkdir -p .github/skills
-cp -R skills/tfpac-setup .github/skills/
-cp -R skills/tfpac-run .github/skills/
+mkdir -p .github/skills && \
+cp -R skills/tfpac-setup .github/skills/ && \
+cp -R skills/tfpac-run .github/skills/ && \
+ls .github/skills/
+```
+
+Expected output:
+```
+tfpac-run  tfpac-setup
 ```
 
 
@@ -207,17 +252,31 @@ cp -R skills/tfpac-run .github/skills/
 
 This section demonstrates the actual tfpac-setup Skill execution using OpenCode. Since this is an AI Agent, you may notice minor differences between the screenshots and your execution results, but the overall flow is expected to be the same.
 
+> **NOTE 1:** After each step, you will be prompted with **Proceed** or **Back** as shown in the screenshots below. Select **Back** if you want to return and make corrections. In most cases where no correction is needed, select **Proceed** to continue.
+
+![Proceed back](photo/setup/proceed_back.png)
+
+> **NOTE 2:** Intermediate results are saved to a file called `.env.tmp` as you progress through each step. At the end, the actual `.env` file used for execution is generated from it.
+
 ### Step 8: Execute the /skills command
+
 
 ![Skills Command](photo/setup/(1):skills.png)
 
 Type `/skills` in your coding agent to view available skills.
+
+**Note:** If OpenCode displays a tip such as "Run `/connect` to add an AI provider", ignore it and proceed with `/skills`. AI provider configuration related to this project is handled by the tfpac-setup skill.
+
+> **OpenCode runs inside your terminal (e.g., inside the VS Code integrated terminal):** OpenCode launches as a full-screen text interface (TUI). The terminal tab will show `opencode` and the interface fills the panel completely. This is normal. To exit OpenCode and return to the regular terminal, press **Ctrl+C** or type `/exit`.
 
 ### Step 9: Select the tfpac-setup skill
 
 ![Select tfpac-setup](photo/setup/(2):tfpac-setup_selection.png)
 
 Choose `tfpac-setup` from the list of available skills to start the interactive environment setup wizard.
+
+> **Note:** `customize-opencode` may appear at the top of the skills list — ignore it. It is unrelated to this product.
+
 
 ### Step 10: Confirm tfpac-setup execution
 
@@ -229,13 +288,11 @@ Press Enter in this state to execute the skill and begin the configuration wizar
 
 ![Docker Image Selection](photo/setup/(4)docker_image_selection.png)
 
-Before this, the wizard determines which container CLI to use. If both `docker` and
-`podman` are installed it asks you to pick one; if only one is installed it uses that one
-without asking.
+Before this, the wizard determines which container CLI to use. If both `docker` and `podman` are installed it asks you to pick one; if only one is installed it uses that one without asking.
 
-Here, select the recommended container image (1. Yes). If the image is not available
-locally, the system will help you pull it. In that case, follow the instructions to pull
-the image.
+Here, select the recommended container image (1. Yes). If the image is not available locally, the system will help you pull it. In that case, follow the instructions to pull the image — an IBM Cloud Container Registry API key (`iamapikey`) is required to run `docker login icr.io -u iamapikey`.
+
+> **Note:** The size of this image is large. Allow 2–5 minutes on broadband. If the pull is interrupted, re-running the command will resume automatically.
 
 ### Step 12: Select execution mode
 
@@ -247,27 +304,21 @@ Here, select "2. Local Mode" to use the `data/input` directory that you copied i
 
 ![Terraform Binary](photo/setup/(6)terraform_binary.png)
 
-Here, select "2. Type your own answer" and enter the path to your Terraform binary that you saved in [Step 5: Prepare Required Binaries](#step-5-prepare-required-binaries) of [Prerequisites](#prerequisites).
-
-Example: `/Users/<your-username>/terraform-binaries/terraform`
-
-**Note:** Replace `<your-username>` with your actual username.
+Select **2. No, download it** to have the wizard automatically download and configure the correct Terraform binary for your architecture.
 
 ### Step 14: Configure TFPolicy binary path
 
 ![TFPolicy Binary](photo/setup/(7)tfpolicy_binary.png)
 
-Here, select "2. Type your own answer" and enter the path to your TFPolicy binary that you saved in [Step 5: Prepare Required Binaries](#step-5-prepare-required-binaries) of [Prerequisites](#prerequisites).
-
-Example: `/Users/<your-username>/terraform-binaries/tfpolicy`
-
-**Note:** Replace `<your-username>` with your actual username.
+Select **2. No, download it** to have the wizard automatically download and configure the correct TFPolicy binary for your architecture.
 
 ### Step 15: Select authentication provider
 
 ![Authentication Provider](photo/setup/(8)provider.png)
 
 Choose your authentication method: LiteLLM (for enterprise endpoints), Amazon Bedrock (Bearer Token), or GitHub Copilot. If you choose GitHub Copilot, the wizard will guide you through obtaining the required GitHub Copilot CLI credentials, as this setup is slightly more complex.
+
+**Recommended model:** `claude-sonnet-5` — best balance of quality and cost for policy conversion.
 
 ### Step 16: Pipeline configuration
 
@@ -279,16 +330,9 @@ Here, select the default (1. No). You can optionally customize pipeline settings
 
 ![Additional Docker](photo/setup/(10)additinal_docker.png)
 
-Here, select the default (1. No). You can optionally configure additional container
-settings: the container prefix, the image name and tag, the container CLI (`DOCKER_CLI`,
-already set in [Step 11](#step-11-container-image-selection)), and
-`DOCKER_RUN_EXTRA_ARGS`.
+Here, select the default (1. No). You can optionally configure additional container settings: the container prefix, the image name and tag, the container CLI (`DOCKER_CLI`, already set in [Step 11](#step-11-container-image-selection)), and `DOCKER_RUN_EXTRA_ARGS`.
 
-`DOCKER_RUN_EXTRA_ARGS` is appended verbatim to the container run command and is only
-needed for Podman on Linux — `--security-opt label=disable` on SELinux-enforcing hosts,
-and `--add-host=host.docker.internal:host-gateway` if a rootless container cannot reach
-the MCP server on the host. Leave it empty on macOS. See
-[README.md](README.md#container-cli) for the full table.
+`DOCKER_RUN_EXTRA_ARGS` is appended verbatim to the container run command and is only needed for Podman on Linux — `--security-opt label=disable` on SELinux-enforcing hosts, and `--add-host=host.docker.internal:host-gateway` if a rootless container cannot reach the MCP server on the host. Leave it empty on macOS. See [README.md](README.md#container-cli) for the full table.
 
 ### Step 18: Timeout configuration
 
@@ -327,8 +371,7 @@ Review the setup completion report showing configuration summary and next steps.
 
 - **For GitHub Copilot:** Access token
 
-  Run this command to authenticate and retrieve your GitHub Copilot tokens (use `podman`
-  instead of `docker` if that is your CLI):
+  Run this command to authenticate and retrieve your GitHub Copilot tokens (use `podman` instead of `docker` if that is your CLI):
 
   ```bash
   docker run --rm -it --entrypoint "" \
@@ -478,14 +521,42 @@ Each `report.md` contains:
 
 This guide uses coding agents (OpenCode or GitHub Copilot CLI), but you can also run the pipeline manually for more advanced control. See [README.md](README.md) for details.
 
+## Resuming a Session
+
+If you take a break and return later, run the following to restore the required services:
+
+```bash
+# Check running containers (look for terraform-mcp-server)
+docker ps -a
+```
+
+- If `terraform-mcp-server` shows **Up** — already running, nothing to do.
+- If it shows **Exited** — restart it:
+  ```bash
+  docker start terraform-mcp-server
+  ```
+
+```bash
+# Confirm the MCP server image is present
+docker image ls hashicorp/terraform-mcp-server:1.1.0
+```
+
+If the image is missing, re-run the `docker pull` command from Step 5.
+
+If you interrupted `tfpac-setup` or `tfpac-run` mid-way, simply run the skill again from the beginning.
+
+---
+
 ## Troubleshooting
 
 If you encounter issues not covered here:
 
 1. **Check logs:** Review stage logs in `data/output/stage*.log`
 2. **Verify configuration:** Double-check all settings in `.env`
+3. **See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)** for known error patterns and fixes.
 
 ---
 
-**Document Version:** 2.0  
-**Last Updated:** July 2026  
+**Document Version:** 2.0
+**Applies to IMAGE_VERSION:** 0.0.31
+**Last Updated:** July 2026

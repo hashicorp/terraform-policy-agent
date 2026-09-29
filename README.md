@@ -1,8 +1,12 @@
 # terraform-policy-agent Quick Start Guide
 
+> **New here?** Follow **[USER_GUIDE.md](USER_GUIDE.md)** for a step-by-step walkthrough. This README is the technical quick-start reference.
+
 ## Getting Started
 
 ### 1. Setup Workspace
+
+> **NOTE:** Use the `main` branch of this repository.
 
 Prepare this folder.
 Your workspace should contain:
@@ -14,6 +18,18 @@ sample-data/        run_pipeline.py     skills/
 ```
 
 ### 2. Prerequisites
+
+**Python**:
+
+Python 3.10 or later is required.
+
+```bash
+python3 --version  # Must be 3.10 or later
+```
+
+If Python is missing or outdated, install or update it.
+
+**Container CLI Runtime**:
 
 The agent runs in a container, so you'll need either `docker` or `podman` available on
 your system.
@@ -41,6 +57,7 @@ Pull the pre-built container image from the registry:
 # Login to IBM Cloud Container Registry
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
+# Nothing will appear as you type — this is normal security behaviour. Do not paste twice.
 docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31
 ```
 
@@ -112,21 +129,7 @@ cp .env.example .env
 
 Choose one of the following authentication providers:
 
-**Option A: LiteLLM (Default)**
-
-```bash
-AUTH_PROVIDER=litellm
-MODEL_BASE_URL=https://your-litellm-endpoint.com
-MODEL_NAME=aws/claude-sonnet-4-5
-MODEL_API_KEY=sk-your-litellm-api-key
-```
-
-- `AUTH_PROVIDER`: Set to `litellm`
-- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
-- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
-- `MODEL_API_KEY`: Your LiteLLM API key
-
-**Option B: GitHub Copilot**
+**Option A: GitHub Copilot (Default)**
 
 ```bash
 AUTH_PROVIDER=github-copilot
@@ -144,6 +147,20 @@ GITHUB_COPILOT_EXPIRES=0  # Optional, defaults to 0
 - `GITHUB_COPILOT_ACCESS_TOKEN`: Your GitHub Copilot access token
 - `GITHUB_COPILOT_REFRESH_TOKEN`: (Optional) Refresh token, defaults to access token if not set
 - `GITHUB_COPILOT_EXPIRES`: (Optional) Token expiration timestamp, defaults to 0
+
+**Option B: LiteLLM**
+
+```bash
+AUTH_PROVIDER=litellm
+MODEL_BASE_URL=https://your-litellm-endpoint.com
+MODEL_NAME=aws/claude-sonnet-4-5
+MODEL_API_KEY=sk-your-litellm-api-key
+```
+
+- `AUTH_PROVIDER`: Set to `litellm`
+- `MODEL_BASE_URL`: Your LiteLLM endpoint URL
+- `MODEL_NAME`: Model identifier (e.g., `aws/claude-sonnet-4-5`)
+- `MODEL_API_KEY`: Your LiteLLM API key
 
 **Option C: Amazon Bedrock (Bearer Token)**
 
@@ -286,10 +303,17 @@ Before running the pipeline, verify all prerequisites are met:
 # Or check specific components
 # ("docker" here is the name of the container-engine check, not the CLI:
 #  keep it as "docker" even when DOCKER_CLI=podman)
+./pre-check.sh workdir   # Working directory path only
 ./pre-check.sh docker    # Container engine only
-./pre-check.sh mcp       # MCP server only
-./pre-check.sh binaries  # terraform/tfpolicy binaries only
 ./pre-check.sh env       # Environment variables only
+./pre-check.sh binaries  # terraform/tfpolicy binaries only
+./pre-check.sh input     # Input file only
+./pre-check.sh image     # Container image only
+./pre-check.sh mcp       # MCP server only
+./pre-check.sh output    # Output directory only
+./pre-check.sh local     # Local mode config only
+./pre-check.sh external  # External mode config only
+./pre-check.sh api       # API credentials only
 
 # JSON output for automation
 ./pre-check.sh --json
@@ -305,8 +329,33 @@ The pre-flight check will verify:
 - 🟢 **input**: Input files exist
 - 🟢 **image**: Container image is available
 - 🟢 **mcp**: MCP server is accessible at localhost:8500
+- 🟢 **output**: Output directory is empty (ready for pipeline)
+- 🟢 **local**: Local mode — `EXTERNAL_REPO_DIR` is not set, `INPUT_DIR`/`INPUT_FILE`/`OUTPUT_DIR` are present
+- 🟢 **external**: External mode — `EXTERNAL_REPO_DIR` is set and the directory exists
+- 🟢 **workdir**: Working directory path has no unsafe characters
+- 🟢 **api**: API credentials are valid (tested via lightweight ping)
 
 If any issues are found, the tool will provide clear error messages with 🔴 status and suggestions for fixing them.
+
+**Mode-based check behaviour** — When running `./pre-check.sh` (all checks), the fully ready state looks different depending on your mode. `local` and `external` are mutually exclusive: one will always show 🔴, which is **expected and should be ignored**:
+
+| Check    | Local mode           | External mode        |
+|----------|----------------------|----------------------|
+| docker   | ✅ pass              | ✅ pass              |
+| env      | ✅ pass              | ✅ pass              |
+| binaries | ✅ pass              | ✅ pass              |
+| input    | ✅ pass              | ✅ pass (or ⚠️ warn) |
+| image    | ✅ pass              | ✅ pass              |
+| mcp      | ✅ pass              | ✅ pass              |
+| output   | ✅ pass              | ✅ pass              |
+| local    | ✅ pass              | 🔴 expected — ignore |
+| external | 🔴 expected — ignore | ✅ pass              |
+| workdir  | ✅ pass              | ✅ pass              |
+| api      | ✅ pass              | ✅ pass              |
+
+> **Local mode** (`EXTERNAL_REPO_DIR` not set): `external` shows 🔴 — this is expected, ignore it.
+
+> **External mode** (`EXTERNAL_REPO_DIR` set): `local` shows 🔴 — this is expected, ignore it.
 
 ### Primary Use Case: External Repository Integration
 
@@ -444,12 +493,16 @@ stage0_extraction.log       stage3_summary.log      summary.md
 
 ## Pipeline Stages
 
-The pipeline runs 4 stages automatically:
+The pipeline runs 4 stages automatically. Each stage must complete before the next begins.
 
-- **Stage 0**: Extract policy goals → `data/output/goals/`
-- **Stage 1**: Generate requirements → `data/output/PolicyName/requirement.txt`
-- **Stage 2**: Generate policies and tests → `data/output/PolicyName/*.hcl`, `*.tf`
-- **Stage 3**: Create summary → `data/output/summary.md`
+| Stage | What it does | Output |
+|---|---|---|
+| **Stage 0** | Authenticates with the LLM provider and extracts policy goals from `policy_goal.txt` | `data/output/goals/` |
+| **Stage 1** | Generates detailed requirements for each policy goal (runs in parallel) | `data/output/PolicyName/requirement.txt` |
+| **Stage 2** | Generates policy files and tests for each requirement (runs in parallel) | `data/output/PolicyName/*.hcl`, `*.tf` |
+| **Stage 3** | Creates a consolidated summary report | `data/output/summary.md` |
+
+> **If the pipeline fails at Stage 0**, the most likely cause is an invalid or expired API key / token. First, run `./pre-check.sh api` to confirm whether your credentials are valid. If the check fails, re-acquire your tokens and update `.env`. See [Troubleshooting](./TROUBLESHOOTING.md) for fixes.
 
 ## Output Structure
 
@@ -534,6 +587,31 @@ The skill will then guide the workflow in this order:
 ./run.sh external --phase preprocess    # Extract only
 ./run.sh external --phase generate      # Generate only
 ./run.sh external --phase postprocess   # Deploy only
+```
+
+### Resume from Checkpoint
+
+Interrupted runs save progress to `.checkpoint` in `DATA_DIR`. Use `--resume` to pick up from the last completed stage without re-running earlier steps:
+
+```bash
+./run.sh --resume local      # local mode
+./run.sh --resume external   # external mode
+```
+
+### Skip Confirmation Prompts (No-Confirm Mode)
+
+Pass `--no-confirm` to suppress all interactive yes/no prompts and let the pipeline run unattended:
+
+```bash
+./run.sh --no-confirm local
+./run.sh --no-confirm external
+```
+
+Both flags can be combined:
+
+```bash
+./run.sh --no-confirm --resume local
+./run.sh --no-confirm --resume external
 ```
 
 ### Help
