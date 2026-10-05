@@ -65,10 +65,10 @@ docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32
 
 Download the following **Linux** binaries (used inside the container). The architecture must match your host machine:
 
-- **Terraform CLI**: Currently in beta, https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
+- **Terraform CLI**: Currently in beta, https://releases.hashicorp.com/terraform
   - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
-- **TFPolicy CLI**: Currently in beta, https://releases.hashicorp.com/tfpolicy/0.1.0/
+- **TFPolicy CLI**: Currently in beta, https://releases.hashicorp.com/tfpolicy
   - Required architecture: Linux ARM64 (for M1/M2 Mac) or Linux AMD64 (for Intel Mac/Linux)
 
 **Required MCP Server**:
