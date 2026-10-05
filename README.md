@@ -58,7 +58,7 @@ Pull the pre-built container image from the registry:
 docker login icr.io -u iamapikey
 # When prompted, enter your API key
 # Nothing will appear as you type — this is normal security behaviour. Do not paste twice.
-docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31
+docker pull icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32
 ```
 
 **Required Binaries**:
@@ -107,7 +107,7 @@ Download the following **Linux** binaries (used inside the container). The archi
   Or using curl from terraform-pac-agent container:
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
+    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32 \
     curl http://host.docker.internal:8500/health
   ```
   
@@ -182,7 +182,7 @@ Run the following command to obtain tokens in an isolated container environment:
 
 ```bash
 docker run --rm -it --entrypoint "" \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
+  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32 \
   sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
 ```
 
@@ -268,7 +268,7 @@ OUTPUT_DIR=output
 # Execution
 MAX_WORKERS=5
 IMAGE_NAME=icr.io/terraform-policy-agent-2026/terraform-pac-agent
-IMAGE_TAG=0.0.31
+IMAGE_TAG=0.0.32
 
 # Container CLI: docker (default) or podman
 DOCKER_CLI=docker

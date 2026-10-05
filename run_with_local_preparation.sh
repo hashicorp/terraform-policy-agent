@@ -653,7 +653,7 @@ echo ""
 # Format: {provider}/{model} e.g. litellm/aws/claude-sonnet-4-5, amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0
 case "${AUTH_PROVIDER:-litellm}" in
     github-copilot)
-        OPENCODE_MODEL="github-copilot1/${MODEL_NAME}"
+        OPENCODE_MODEL="github-copilot/${MODEL_NAME}"
         ;;
     amazon-bedrock)
         OPENCODE_MODEL="amazon-bedrock/${MODEL_NAME}"

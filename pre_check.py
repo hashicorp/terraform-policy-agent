@@ -295,6 +295,16 @@ def get_image_arch_os(image: str, docker_cli: str = "docker") -> Tuple[Optional[
 
 
 def check_api_credentials(env: dict) -> dict:
+    def http_error_detail(e: Exception) -> str:
+        # Include the response body: it tells e.g. an invalid model from an expired token
+        if isinstance(e, urllib.error.HTTPError):
+            try:
+                body = e.read().decode(errors="replace").strip()
+            except Exception:
+                body = ""
+            return f"HTTP {e.code} {e.reason}" + (f": {body[:300]}" if body else "")
+        return str(e)
+
     provider = env.get("AUTH_PROVIDER", "litellm").lower()
 
     if provider == "litellm":
@@ -319,7 +329,7 @@ def check_api_credentials(env: dict) -> dict:
                 resp.read()
             return {"provider": provider, "ok": True}
         except Exception as e:
-            return {"provider": provider, "ok": False, "error": str(e)}
+            return {"provider": provider, "ok": False, "error": http_error_detail(e)}
 
     elif provider == "github-copilot":
         access_token = env.get("GITHUB_COPILOT_ACCESS_TOKEN", "")
@@ -328,29 +338,26 @@ def check_api_credentials(env: dict) -> dict:
             return {"provider": provider, "ok": False, "error": "GITHUB_COPILOT_ACCESS_TOKEN is not set"}
         if not model_name:
             return {"provider": provider, "ok": False, "error": "MODEL_NAME is not set"}
-        # Step 1: Exchange for a short-lived Copilot token
         req = urllib.request.Request(
-            "https://api.github.com/copilot_internal/v2/token",
-            headers={"Authorization": f"token {access_token}", "Accept": "application/json", "Editor-Version": "pre_check/1.0"},
+            "https://api.githubcopilot.com/chat/completions",
+            data=json.dumps({"model": model_name, "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 1}).encode(),
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Openai-Intent": "conversation-edits",
+                "Copilot-Integration-Id": "vscode-chat",
+                "Editor-Version": "vscode/1.99.0",
+                "User-Agent": "pre_check/1.0",
+            },
+            method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode())
-            copilot_token = data.get("token")
-            if not copilot_token:
-                return {"provider": provider, "ok": False, "error": f"No token in response: {data}"}
-            # Step 2: LLM call via Copilot chat/completions
-            ping_req = urllib.request.Request(
-                "https://api.githubcopilot.com/chat/completions",
-                data=json.dumps({"model": model_name, "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 1}).encode(),
-                headers={"Authorization": f"Bearer {copilot_token}", "Content-Type": "application/json", "Accept": "application/json", "Copilot-Integration-Id": "vscode-chat", "Editor-Version": "pre_check/1.0"},
-                method="POST",
-            )
-            with urllib.request.urlopen(ping_req, timeout=15) as r:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 resp.read()
             return {"provider": provider, "ok": True}
         except Exception as e:
-            return {"provider": provider, "ok": False, "error": str(e)}
+            return {"provider": provider, "ok": False, "error": http_error_detail(e)}
 
     elif provider == "amazon-bedrock":
         bearer_token = env.get("MODEL_API_KEY", "")
@@ -359,19 +366,29 @@ def check_api_credentials(env: dict) -> dict:
             return {"provider": provider, "ok": False, "error": "MODEL_API_KEY (Bedrock bearer token) is not set"}
         if not model_name:
             return {"provider": provider, "ok": False, "error": "MODEL_NAME is not set"}
-        url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_name}/converse"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps({"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}).encode(),
-            headers={"Authorization": f"Bearer {bearer_token}", "Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                resp.read()
-            return {"provider": provider, "ok": True}
-        except Exception as e:
-            return {"provider": provider, "ok": False, "error": str(e)}
+        # Like OpenCode, retry with the "us." cross-region prefix when Bedrock rejects
+        # a bare model ID for on-demand throughput (e.g. anthropic.claude-opus-4-5-...).
+        candidates = [model_name]
+        if model_name.split(".", 1)[0] not in ("global", "us", "eu", "jp", "apac", "au"):
+            candidates.append(f"us.{model_name}")
+        error = ""
+        for candidate in candidates:
+            url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{candidate}/converse"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}).encode(),
+                headers={"Authorization": f"Bearer {bearer_token}", "Content-Type": "application/json", "Accept": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    resp.read()
+                return {"provider": provider, "ok": True}
+            except Exception as e:
+                error = http_error_detail(e)
+                if "inference profile" not in error:
+                    break
+        return {"provider": provider, "ok": False, "error": error}
 
     else:
         return {"provider": provider, "ok": False, "error": f"Unknown AUTH_PROVIDER: {provider!r}"}

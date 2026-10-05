@@ -180,7 +180,7 @@ docker run -d \
 ```bash
 docker run --rm -it --entrypoint "" \
   --add-host=host.docker.internal:host-gateway \
-  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
+  icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32 \
   curl http://host.docker.internal:8500/health
 ```
 
@@ -375,7 +375,7 @@ Review the setup completion report showing configuration summary and next steps.
 
   ```bash
   docker run --rm -it --entrypoint "" \
-    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.31 \
+    icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32 \
     sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
   ```
 
@@ -558,5 +558,5 @@ If you encounter issues not covered here:
 ---
 
 **Document Version:** 2.0
-**Applies to IMAGE_VERSION:** 0.0.31
+**Applies to IMAGE_VERSION:** 0.0.32
 **Last Updated:** July 2026
