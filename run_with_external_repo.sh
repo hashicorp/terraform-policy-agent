@@ -1,7 +1,21 @@
 #!/bin/bash
 # Copyright IBM Corp. 2026
+# SPDX-License-Identifier: MPL-2.0
 
 set -e
+
+# Strip the directory and the .sentinel / .rego extension from a policy file path
+policy_basename() {
+    local b
+    b=$(basename "$1")
+    b="${b%.sentinel}"
+    printf '%s' "${b%.rego}"
+}
+
+# True for OPA test files (e.g. foo_test.rego), which are not policies
+is_rego_test_file() {
+    [[ "$1" == *_test.rego ]]
+}
 
 # Parse command line arguments
 PHASE=""
@@ -73,25 +87,16 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Shared helpers (load_env_file, preserve_env_vars, ...)
+source "${SCRIPT_DIR}/common.sh"
+
 # Preserve environment variables that should not be overridden by .env
-PRESERVED_DATA_DIR="${DATA_DIR}"
-PRESERVED_INPUT_DIR="${INPUT_DIR}"
-PRESERVED_OUTPUT_DIR="${OUTPUT_DIR}"
-PRESERVED_INPUT_FILE="${INPUT_FILE}"
+ENV_OVERRIDABLE_VARS=(DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE)
+preserve_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # Load environment variables from .env file
 # Priority: 1. Current directory, 2. Project root
-if [ -f ".env" ]; then
-    echo "Loading environment variables from $(pwd)/.env..."
-    set -a
-    source ".env"
-    set +a
-    echo "✓ Environment variables loaded"
-elif [ -f "${PROJECT_ROOT}/.env" ]; then
-    echo "Loading environment variables from ${PROJECT_ROOT}/.env..."
-    set -a
-    source "${PROJECT_ROOT}/.env"
-    set +a
+if load_env_file true "${PROJECT_ROOT}"; then
     echo "✓ Environment variables loaded"
 else
     echo "Error: .env file not found"
@@ -101,10 +106,7 @@ else
 fi
 
 # Restore preserved variables if they were already set
-[ -n "$PRESERVED_DATA_DIR" ] && DATA_DIR="$PRESERVED_DATA_DIR"
-[ -n "$PRESERVED_INPUT_DIR" ] && INPUT_DIR="$PRESERVED_INPUT_DIR"
-[ -n "$PRESERVED_OUTPUT_DIR" ] && OUTPUT_DIR="$PRESERVED_OUTPUT_DIR"
-[ -n "$PRESERVED_INPUT_FILE" ] && INPUT_FILE="$PRESERVED_INPUT_FILE"
+restore_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # Check required variables
 if [ -z "$EXTERNAL_REPO_DIR" ]; then
@@ -134,7 +136,7 @@ if [ "$DRYRUN" = true ]; then
     echo "  Output   : ${DATA_DIR}/output-{timestamp}  (created at runtime)"
     if [ -z "$PHASE" ] || [ "$PHASE" = "generate" ]; then
         echo "  Model    : ${AUTH_PROVIDER:-litellm} / ${MODEL_NAME:-}"
-        echo "  Image    : ${IMAGE_NAME:-terraform-pac-agent-skills}:${IMAGE_TAG:-latest}"
+        echo "  Image    : ${IMAGE_NAME:-docker.io/hashicorp/terraform-policy-agent}:${IMAGE_TAG:-0.0.33}"
     fi
     echo "=========================================="
     echo ""
@@ -235,15 +237,20 @@ if [ "$RUN_PREPROCESS" = true ]; then
     echo "  Output: $TEMP_OUTPUT_DIR"
     echo ""
 
-    # Copy .sentinel files from external repo
+    # Copy .sentinel and .rego (OPA) files from external repo
     SENTINEL_COUNT=0
     SKIPPED_COUNT=0
     MOCK_COUNT=0
 
     while IFS= read -r -d '' sentinel_file; do
         sentinel_dir=$(dirname "$sentinel_file")
-        sentinel_basename=$(basename "$sentinel_file" .sentinel)
+        sentinel_basename=$(policy_basename "$sentinel_file")
         
+        # Skip OPA test files (*_test.rego)
+        if is_rego_test_file "$sentinel_file"; then
+            continue
+        fi
+
         # Skip mock files in test/ directories
         if [[ "$sentinel_file" == */test/* ]]; then
             echo "⊘ Skipped: $sentinel_file (mock file in test/ directory)"
@@ -286,7 +293,7 @@ if [ "$RUN_PREPROCESS" = true ]; then
                 fi
             fi
         fi
-    done < <(find "$EXTERNAL_REPO_DIR" -type f -name "*.sentinel" -print0)
+    done < <(find "$EXTERNAL_REPO_DIR" -type f \( -name "*.sentinel" -o -name "*.rego" \) -print0)
 
     if [ $SENTINEL_COUNT -eq 0 ]; then
         echo ""
@@ -327,8 +334,8 @@ if [ "$RUN_PREPROCESS" = true ]; then
     # Docker mounts DATA_DIR as /workspace/data, so paths should be relative to that
     # Exclude files in test/ directories (mock files)
     while IFS= read -r -d '' sentinel_file; do
-        # Skip if this is a mock file in test/ directory
-        if [[ "$sentinel_file" == */test/* ]]; then
+        # Skip if this is a mock file in test/ directory or an OPA test file
+        if [[ "$sentinel_file" == */test/* ]] || is_rego_test_file "$sentinel_file"; then
             continue
         fi
         
@@ -337,7 +344,7 @@ if [ "$RUN_PREPROCESS" = true ]; then
         
         # Check if mock directory exists for this sentinel (only if feature flag is enabled)
         if [ "${ENABLE_SENTINEL_MOCK_USE:-true}" = "true" ]; then
-            sentinel_basename=$(basename "$sentinel_file" .sentinel)
+            sentinel_basename=$(policy_basename "$sentinel_file")
             sentinel_dir=$(dirname "$sentinel_file")
             mock_dir="$sentinel_dir/test/$sentinel_basename"
             
@@ -352,7 +359,7 @@ if [ "$RUN_PREPROCESS" = true ]; then
             # Feature flag disabled, don't include mock files
             echo "- ${sentinel_line}" >> "$POLICY_GOAL_FILE"
         fi
-    done < <(find "$SENTINELS_DIR" -type f -name "*.sentinel" -print0 | sort -z)
+    done < <(find "$SENTINELS_DIR" -type f \( -name "*.sentinel" -o -name "*.rego" \) -print0 | sort -z)
 
     # Add sentinel.hcl reference if exists
     if [ -f "$SENTINELS_DIR/sentinel.hcl" ]; then
@@ -536,7 +543,7 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 
                 # First, try to identify the input sentinel directly from input/sentinels
                 if [ -d "${TEMP_INPUT_DIR}/sentinels" ]; then
-                    matched_sentinel=$(find "${TEMP_INPUT_DIR}/sentinels" -type f \( -name "${normalized_dir_name}.sentinel" -o -name "${sentinel_basename_from_dir}.sentinel" \) | head -n 1)
+                    matched_sentinel=$(find "${TEMP_INPUT_DIR}/sentinels" -type f \( -name "${normalized_dir_name}.sentinel" -o -name "${sentinel_basename_from_dir}.sentinel" -o -name "${normalized_dir_name}.rego" -o -name "${sentinel_basename_from_dir}.rego" \) | head -n 1)
                     if [ -n "$matched_sentinel" ]; then
                         sentinel_path="${matched_sentinel#${TEMP_INPUT_DIR}/sentinels/}"
                     fi
@@ -545,13 +552,13 @@ if [ "$RUN_POSTPROCESS" = true ]; then
                 # Fallback to report.md if direct lookup failed
                 if [ -z "$sentinel_path" ]; then
                     [ ! -f "$report_file" ] && continue
-                    sentinel_path=$(grep -o "sentinels/[^[:space:]]*\.sentinel" "$report_file" | head -n 1 | sed 's|sentinels/||')
+                    sentinel_path=$(grep -oE "sentinels/[^[:space:]]*\.(sentinel|rego)" "$report_file" | head -n 1 | sed 's|sentinels/||')
                     [ -z "$sentinel_path" ] && continue
                 fi
                 
                 # Determine target directory
                 sentinel_dir=$(dirname "$sentinel_path")
-                sentinel_basename=$(basename "$sentinel_path" .sentinel)
+                sentinel_basename=$(policy_basename "$sentinel_path")
                 
                 if [ "$sentinel_dir" = "." ]; then
                     target_dir="$EXTERNAL_REPO_DIR/tfpolicy/$sentinel_basename"
@@ -747,5 +754,3 @@ if [ "$RUN_POSTPROCESS" = true ]; then
     echo "     git push"
     echo ""
 fi
-
-# Made with Bob

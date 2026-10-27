@@ -10,7 +10,7 @@ Use this guide after prerequisites are confirmed.
 
 ## Goal
 
-Run the full Terraform Policy Automation pipeline and capture enough context for later verification.
+Run the full Terraform Policy Agent pipeline and capture enough context for later verification.
 
 ## Execution Mode
 
@@ -55,7 +55,7 @@ After that (or immediately for `conversion_external`), execute the appropriate c
 Before presenting the confirmation request, check:
 ```bash
 set -a; [ -f .env ] && . ./.env; set +a
-"${DOCKER_CLI:-docker}" ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+"${DOCKER_CLI:-docker}" ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-policy-agent-skills}"
 ```
 Sourcing `.env` here picks up both `DOCKER_CLI` (docker or podman) and `CONTAINER_PREFIX`. Never echo the sourced values: `.env` also holds credentials.
 
@@ -106,7 +106,7 @@ nohup ./run.sh --no-confirm local --step 3 > <LOG_DIR>/run.sh-step3.log 2>&1 & e
 Before presenting the confirmation request, check:
 ```bash
 set -a; [ -f .env ] && . ./.env; set +a
-"${DOCKER_CLI:-docker}" ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+"${DOCKER_CLI:-docker}" ps --format '{{.Names}}' | grep "^${CONTAINER_PREFIX:-terraform-policy-agent-skills}"
 ```
 If containers are found, include this warning in the confirmation message:
 > ⚠️ **Warning:** Container(s) with prefix `{CONTAINER_PREFIX}` are already running. It is recommended to stop them or wait until they finish before proceeding.
@@ -264,10 +264,10 @@ Verify no containers with that prefix are still running:
 {DOCKER_CLI} ps | grep {CONTAINER_PREFIX}
 ```
 
-If either variable is not set, use its default (`DOCKER_CLI=docker`, `CONTAINER_PREFIX=terraform-pac-agent-skills`):
+If either variable is not set, use its default (`DOCKER_CLI=docker`, `CONTAINER_PREFIX=terraform-policy-agent-skills`):
 
 ```bash
-docker ps | grep terraform-pac-agent-skills
+docker ps | grep terraform-policy-agent-skills
 ```
 
 If any containers are still running:

@@ -1,6 +1,7 @@
 ---
 name: tfpac-setup
 description: Set up the environment (run this first). Guide users through an interactive wizard to create a `.env` file for the Terraform Policy Agent project by asking questions and generating a properly formatted `.env` file based on user responses. Supports the unified `run.sh` workflow, which automatically switches between local mode and external repository mode based on whether `EXTERNAL_REPO_DIR` is configured.
+license: MPL-2.0
 ---
 
 # Skill: Interactive Environment Setup Wizard
@@ -99,8 +100,7 @@ Display: `[1/11] Pre-flight System Check`
 
 **Step 1a: Determine the container CLI (docker or podman)**
 
-The agent supports both Docker and Podman. The CLI is configured with `DOCKER_CLI` in `.env`
-and defaults to `docker`. Determine which one to use in this order:
+The agent supports both Docker (default) and Podman. The CLI is configured with `DOCKER_CLI` in `.env`. Determine which one to use in this order:
 
 1. **If `.env.tmp` already exists**, read it and check `DOCKER_CLI`.
    If it is set, use that value and skip detection.
@@ -122,16 +122,16 @@ sufficient — all agent scripts (`run.sh`, `stop.sh`, `pre-check.sh`) read it f
 **Step 1b: Container Image Configuration and Setup**
 
 **Ask: "Do you want to use the latest recommended container image version?"**
-- Recommended image: `icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32`
+- Recommended image: `docker.io/hashicorp/terraform-policy-agent:0.0.33`
 - Default: Yes
 
 If **Yes** (use recommended version):
-- Set `IMAGE_NAME`: "icr.io/terraform-policy-agent-2026/terraform-pac-agent"
-- Set `IMAGE_TAG`: "0.0.32"
+- Set `IMAGE_NAME`: "docker.io/hashicorp/terraform-policy-agent"
+- Set `IMAGE_TAG`: "0.0.33"
 
 If **No** (custom version):
-- Ask for `IMAGE_NAME` (default: "icr.io/terraform-policy-agent-2026/terraform-pac-agent")
-- Ask for `IMAGE_TAG` (default: "0.0.32")
+- Ask for `IMAGE_NAME` (default: "docker.io/hashicorp/terraform-policy-agent")
+- Ask for `IMAGE_TAG` (default: "0.0.33")
 
 **Check if image exists locally:**
 ```bash
@@ -145,29 +145,15 @@ their full registry name. Matching on `[IMAGE_NAME]:[IMAGE_TAG]` with `grep` wor
 because the registry-qualified name is used here.
 
 **If image does not exist locally:**
-- Show message: "📦 Container image not found locally. You need to pull it first. The image is approximately 2 GB. So let me check your available disk space first."
+- Show message: "📦 Container image not found locally. You need to pull it first. The image is approximately 1.1 GB. So let me check your available disk space first."
 - Check available disk space and display the result to the user:
   ```bash
   df -h .
   ```
-  If available space is less than 6 GB, warn: "⚠️ Low disk space detected. Please free up at least 6 GB before pulling." Then stop until the user confirms they have freed up space.
+  If available space is less than 3 GB, warn: "⚠️ Low disk space detected. Please free up at least 3 GB before pulling." Then stop until the user confirms they have freed up space.
 
-- **Important:** Image pull requires authentication. Show ONLY the following instructions (do not provide alternative methods):
-  ```
-  🔐 Authentication Required
-  
-  Before pulling the image, please login to IBM Cloud Container Registry in your terminal:
-  
-  [DOCKER_CLI] login icr.io -u iamapikey
-  
-  When prompted, enter your IBM Cloud API key.
-  (If you don't have an API key, please contact your HashiCorp representative to obtain access.)
-  
-  After successful login, please confirm and I will pull the image for you.
-  ```
-- **IMPORTANT:** Do NOT suggest creating API keys or provide alternative authentication methods. Users must obtain API keys from their HashiCorp representative.
-- **Wait for user confirmation** that they have logged in successfully
-- After login confirmation, ask: "Ready to pull the container image (~2 GB). This will take several minutes on broadband. Continue? [Yes/No]"
+- The image is public on Docker Hub (https://hub.docker.com/r/hashicorp/terraform-policy-agent); **no login is required**. Do not ask the user to log in to any registry.
+- Ask: "Ready to pull the container image. This will take several minutes on broadband. Continue? [Yes/No]"
   - If **No**: Stop and inform the user — "Pull skipped. Re-run setup when you are ready to pull the image."
   - If **Yes**: Display to the user: "Pulling the image now. You will see multiple download progress lines — this is normal. Please wait until it stops."
     Then run:
@@ -181,7 +167,6 @@ because the registry-qualified name is used here.
   ```
   ❌ Pull failed. To retry manually, run:
 
-     [DOCKER_CLI] login icr.io -u iamapikey
      [DOCKER_CLI] pull [IMAGE_NAME]:[IMAGE_TAG]
 
   Once the pull succeeds, re-run tfpac-setup — it will resume from this step automatically via .env.tmp.
@@ -224,11 +209,11 @@ This check uses the container image and `DOCKER_CLI` specified in `.env.tmp` to 
   ❌ MCP server is not reachable. Start it with:
 
   [DOCKER_CLI] run -d --name terraform-mcp-server \
-    -p 8500:8080 \
+    -p 127.0.0.1:8500:8080 \
     -e TRANSPORT_MODE=streamable-http \
     -e TRANSPORT_HOST=0.0.0.0 \
     -e MCP_SESSION_MODE=stateless \
-    hashicorp/terraform-mcp-server:1.1.0
+    docker.io/hashicorp/terraform-mcp-server:1.1.0
 
   Then re-run this check: ./pre-check.sh --tmp mcp
 
@@ -322,22 +307,22 @@ If **No** or user declines help:
   ```
   📋 Manual Setup Instructions:
   1. Create directory: data/input/sentinels/
-  2. Copy your Sentinel policy files (.sentinel) to data/input/sentinels/
+  2. Copy your Sentinel (.sentinel) or OPA (.rego) policy files to data/input/sentinels/
   3. Create data/input/policy_goal.txt with content:
      Convert following Sentinel Policies to TF Policies:
      - ./data/input/sentinels/your-policy-1.sentinel
-     - ./data/input/sentinels/your-policy-2.sentinel
+     - ./data/input/sentinels/your-policy-2.rego
   ```
 
 ### 2b. External Repository Setup (Only for `run.sh external`)
 
 **This step is reached only if user selected "External Repository Mode" in step 2.**
 
-**Ask: "What is the path to your external Sentinel repository?"**
+**Ask: "What is the path to your external policy repository (Sentinel or OPA)?"**
 - Parameter: `EXTERNAL_REPO_DIR`
 - Default: "./workdir/workspaces/external_repo"
 - Validation: Directory must exist
-- Note: "This directory should contain your Sentinel policy files (.sentinel)"
+- Note: "This directory should contain your Sentinel (.sentinel) or OPA (.rego) policy files"
 
 **Immediately write `EXTERNAL_REPO_DIR` to `.env.tmp` with the confirmed value.**
 
@@ -350,7 +335,7 @@ If **No** or user declines help:
   ```
 
 **Note:** The script will automatically:
-- Extract all .sentinel files from EXTERNAL_REPO_DIR
+- Extract all .sentinel and .rego files from EXTERNAL_REPO_DIR (*_test.rego files are skipped)
 - Skip files that already have tfpolicy/ conversions
 - Generate policy_goal.txt automatically
 - Deploy results back to the repository
@@ -384,10 +369,10 @@ Use `IMAGE_OS`/`IMAGE_ARCH` to determine the correct download URLs for the binar
 
 | Image OS | Image Arch | Terraform download URL | TFPolicy download URL |
 |----------|------------|------------------------|-----------------------|
-| linux | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_arm64.zip` |
-| linux | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_linux_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_linux_amd64.zip` |
-| darwin | arm64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_arm64.zip` |
-| darwin | amd64 | `https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/terraform_1.16.0-alpha20260715_darwin_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.1.0/tfpolicy_0.1.0_darwin_amd64.zip` |
+| linux | arm64 | `https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_linux_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.5.0/tfpolicy_0.5.0_linux_arm64.zip` |
+| linux | amd64 | `https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_linux_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.5.0/tfpolicy_0.5.0_linux_amd64.zip` |
+| darwin | arm64 | `https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_darwin_arm64.zip` | `https://releases.hashicorp.com/tfpolicy/0.5.0/tfpolicy_0.5.0_darwin_arm64.zip` |
+| darwin | amd64 | `https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_darwin_amd64.zip` | `https://releases.hashicorp.com/tfpolicy/0.5.0/tfpolicy_0.5.0_darwin_amd64.zip` |
 
 **If `IMAGE_OS`/`IMAGE_ARCH` matches one of the four rows above:**
 
@@ -416,7 +401,7 @@ Ask: "Do you already have the Terraform binary? [Y/n]"
   Please download the correct binaries manually from the following pages
   and select the package that matches your container (IMAGE_OS/IMAGE_ARCH):
 
-  Terraform : https://releases.hashicorp.com/terraform/1.16.0-alpha20260715/
+  Terraform : https://releases.hashicorp.com/terraform/1.17.0/
   ```
 - Ask: "Where did you download the Terraform binary?"
   - Store as `TERRAFORM_BINARY_PATH`.
@@ -437,7 +422,7 @@ Ask: "Do you already have the tfpolicy binary? [Y/n]"
   Please download the correct binaries manually from the following pages
   and select the package that matches your container (IMAGE_OS/IMAGE_ARCH):
 
-  TFPolicy  : https://releases.hashicorp.com/tfpolicy/0.1.0/
+  TFPolicy  : https://releases.hashicorp.com/tfpolicy/0.5.0/
   ```
 - Ask: "Where did you download the tfpolicy binary?"
   - Store as `TFPOLICY_BINARY_PATH`.
@@ -503,7 +488,7 @@ Ask: "Do you already have the latest tfpolicy binary from https://releases.hashi
   rm -rf /tmp/tfpolicy-pac.zip /tmp/terraform-pac-tfp/
   ```
   - Show success: "✅ tfpolicy binary placed at `TFPOLICY_BINARY_PATH`."
-  - If it fails, show the error and ask the user to obtain the binary manually at https://releases.hashicorp.com/tfpolicy/0.1.0
+  - If it fails, show the error and ask the user to obtain the binary manually at https://releases.hashicorp.com/tfpolicy/0.5.0
 
 ### Binary Paths Verification
 
@@ -549,7 +534,7 @@ Ask: "Which authentication provider do you want to use?"
 1. **GitHub Copilot CLI (Default)**
    - Set `AUTH_PROVIDER=github-copilot`
    - Ask for:
-     - `MODEL_NAME` (default: "claude-sonnet-4.6")
+     - `MODEL_NAME` (default: "claude-sonnet-4.6"; any recent, capable model offered by the user's Copilot plan works, such as Claude Sonnet 4.6 or newer, Claude Opus or a current GPT model)
    
    **Then show GitHub Copilot CLI token acquisition guide:**
    
@@ -565,7 +550,7 @@ Ask: "Which authentication provider do you want to use?"
    **Step 1: Run the following command** (replace `[DOCKER_CLI]` with the CLI chosen in Step 1a)
    ```bash
    [DOCKER_CLI] run --rm -it --entrypoint "" \
-     icr.io/terraform-policy-agent-2026/terraform-pac-agent:0.0.32 \
+     docker.io/hashicorp/terraform-policy-agent:0.0.33 \
      sh -c 'opencode auth login && cat $HOME/.local/share/opencode/auth.json'
    ```
    
@@ -578,8 +563,8 @@ Ask: "Which authentication provider do you want to use?"
    After authentication completes, tokens will be displayed in JSON format:
    ```json
    {
-     "access_token": "ghu_xxxxxxxxxxxx",
-     "refresh_token": "ghu_xxxxxxxxxxxx",
+     "access_token": "gho_xxxxxxxxxxxx",
+     "refresh_token": "gho_xxxxxxxxxxxx",
      "expires": 1234567890
    }
    ```
@@ -587,8 +572,8 @@ Ask: "Which authentication provider do you want to use?"
    **Step 4: Paste into .env file**
    Later, you'll paste these values into the generated `.env` file:
    ```
-   GITHUB_COPILOT_ACCESS_TOKEN=ghu_xxxxxxxxxxxx
-   GITHUB_COPILOT_REFRESH_TOKEN=ghu_xxxxxxxxxxxx
+   GITHUB_COPILOT_ACCESS_TOKEN=gho_xxxxxxxxxxxx
+   GITHUB_COPILOT_REFRESH_TOKEN=gho_xxxxxxxxxxxx
    GITHUB_COPILOT_EXPIRES=1234567890
    ```
    
@@ -625,7 +610,7 @@ Ask: "Which authentication provider do you want to use?"
    - Set `AUTH_PROVIDER=litellm`
    - Ask for:
      - `MODEL_BASE_URL` (default: "https://your-litellm-endpoint.com")
-     - `MODEL_NAME` (default: "aws/claude-sonnet-4-5")
+     - `MODEL_NAME` (the model name as configured in the LiteLLM endpoint; no default)
      - `MODEL_API_KEY` - **IMPORTANT:** Tell user to manually fill this in the .env file after generation. Never ask for or store secret values directly. (Obtain from your LiteLLM endpoint administrator)
 
 4. **Skip (configure manually later)**
@@ -661,7 +646,7 @@ If yes, ask for:
 - **IMAGE_NAME** (default: value from step 1b, note: "Already configured")
 - **IMAGE_TAG** (default: value from step 1b, note: "Already configured")
 - **DOCKER_CLI** (default: value from step 1a, note: "Already configured. docker or podman")
-- **CONTAINER_PREFIX** (default: "terraform-pac-agent-skills", note: "Useful for multi-environment or multi-user setups")
+- **CONTAINER_PREFIX** (default: "terraform-policy-agent-skills", note: "Useful for multi-environment or multi-user setups")
 - **DOCKER_RUN_EXTRA_ARGS** (default: empty, note: "Host-specific flags appended to the container run command. Only needed for Podman on SELinux-enforcing hosts or rootless Podman on Linux — see below")
 
 **DOCKER_RUN_EXTRA_ARGS guidance** (only offer this when `DOCKER_CLI` is `podman`):
@@ -909,7 +894,7 @@ Note: Input directory setup is not needed for external mode.
 2. Validate API credentials: ./pre-check.sh api
 3. Set up your data directory:
    - Create: DATA_DIR/INPUT_DIR/sentinels/
-   - Copy your .sentinel files there
+   - Copy your .sentinel or .rego files there
    - Create: DATA_DIR/INPUT_DIR/policy_goal.txt with file paths
 4. Verify input files are ready: ./pre-check.sh input
 5. Run the pipeline with: ./run.sh local

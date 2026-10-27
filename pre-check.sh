@@ -46,5 +46,3 @@ fi
 
 # Execute pre_check.py with all arguments
 exec "$PYTHON_CMD" "$PRE_CHECK_PY" "$@"
-
-# Made with Bob

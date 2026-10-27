@@ -1,10 +1,11 @@
 #!/bin/bash
 # Copyright IBM Corp. 2026
+# SPDX-License-Identifier: MPL-2.0
 
 set -e
 
 # ============================================================================
-# Terraform PaC Agent - Unified Run Script (v2)
+# Terraform Policy Agent - Unified Run Script (v2)
 # ============================================================================
 # This script consolidates run_with_local_preparation.sh and run_with_external_repo.sh
 # into a single entry point with subcommand pattern and auto-detection.
@@ -37,6 +38,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PACKAGE_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
+# Shared helpers (resolve_path, load_env_file, resolve_container_cli, ...)
+source "${SCRIPT_DIR}/common.sh"
+
 # Version information
 VERSION="2.0.0"
 
@@ -44,31 +48,9 @@ VERSION="2.0.0"
 # Helper Functions
 # ============================================================================
 
-# Function to resolve path (handle both absolute and relative paths)
-resolve_path() {
-    local path="$1"
-    local path_type="$2"  # "directory" or "file"
-    
-    if [[ "$path" = /* ]]; then
-        # Absolute path
-        echo "$path"
-    else
-        # Relative path
-        if [ "$path_type" = "directory" ]; then
-            # For directories
-            echo "$(cd "$path" 2>/dev/null && pwd)" || echo "$(pwd)/${path}"
-        else
-            # For files
-            local dir=$(dirname "$path")
-            local file=$(basename "$path")
-            echo "$(cd "$dir" 2>/dev/null && pwd)/${file}"
-        fi
-    fi
-}
-
 # Show version information
 show_version() {
-    echo "Terraform PaC Agent - Run Script v${VERSION}"
+    echo "Terraform Policy Agent - Run Script v${VERSION}"
     if [ -n "${IMAGE_TAG:-}" ]; then
         echo "Image Tag: ${IMAGE_TAG}"
     fi
@@ -77,7 +59,7 @@ show_version() {
 # Show global help
 show_global_help() {
     cat << 'EOF'
-Terraform PaC Agent - Unified Run Script
+Terraform Policy Agent - Unified Run Script
 
 USAGE:
     ./run.sh [subcommand] [options]
@@ -210,68 +192,22 @@ EOF
 # ============================================================================
 
 # Preserve environment variables that should not be overridden by .env
-PRESERVED_CONTAINER_NAME="${CONTAINER_NAME}"
-PRESERVED_DATA_DIR="${DATA_DIR}"
-PRESERVED_INPUT_DIR="${INPUT_DIR}"
-PRESERVED_OUTPUT_DIR="${OUTPUT_DIR}"
-PRESERVED_INPUT_FILE="${INPUT_FILE}"
-PRESERVED_LOCAL_SKILLS_DIR="${LOCAL_SKILLS_DIR}"
+ENV_OVERRIDABLE_VARS=(CONTAINER_NAME DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE LOCAL_SKILLS_DIR)
+preserve_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # Load environment variables from .env file if it exists
 # Priority: 1. Current directory, 2. Project root, 3. Package root
-ENV_FILE_LOADED=false
-if [ -f ".env" ]; then
-    set -a
-    source ".env"
-    set +a
-    ENV_FILE_LOADED=true
-    ENV_FILE_PATH="$(pwd)/.env"
-elif [ -f "${PROJECT_ROOT}/.env" ]; then
-    set -a
-    source "${PROJECT_ROOT}/.env"
-    set +a
-    ENV_FILE_LOADED=true
-    ENV_FILE_PATH="${PROJECT_ROOT}/.env"
-elif [ -f "${PACKAGE_ROOT}/.env" ]; then
-    set -a
-    source "${PACKAGE_ROOT}/.env"
-    set +a
-    ENV_FILE_LOADED=true
-    ENV_FILE_PATH="${PACKAGE_ROOT}/.env"
-fi
+load_env_file false "${PROJECT_ROOT}" "${PACKAGE_ROOT}" || true
 
 # Restore preserved variables if they were already set
-[ -n "$PRESERVED_CONTAINER_NAME" ] && CONTAINER_NAME="$PRESERVED_CONTAINER_NAME"
-[ -n "$PRESERVED_DATA_DIR" ] && DATA_DIR="$PRESERVED_DATA_DIR"
-[ -n "$PRESERVED_INPUT_DIR" ] && INPUT_DIR="$PRESERVED_INPUT_DIR"
-[ -n "$PRESERVED_OUTPUT_DIR" ] && OUTPUT_DIR="$PRESERVED_OUTPUT_DIR"
-[ -n "$PRESERVED_INPUT_FILE" ] && INPUT_FILE="$PRESERVED_INPUT_FILE"
-[ -n "$PRESERVED_LOCAL_SKILLS_DIR" ] && LOCAL_SKILLS_DIR="$PRESERVED_LOCAL_SKILLS_DIR"
+restore_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # ============================================================================
 # Container CLI Resolution
 # ============================================================================
-# Resolve the container CLI used to run the agent (docker or podman).
-# Priority: .env > environment variable > default (docker)
-#
-# DOCKER_CLI is deliberately NOT in the PRESERVED_* list above: a value set in
-# .env is meant to win over an exported environment variable, so that .env stays
-# the single place where the container CLI is configured.
-DOCKER_CLI="${DOCKER_CLI:-docker}"
-
-if ! command -v "${DOCKER_CLI}" >/dev/null 2>&1; then
-    echo "ERROR: Container CLI '${DOCKER_CLI}' not found in PATH"
-    echo ""
-    echo "Please choose one of the following options:"
-    echo "  1. Install ${DOCKER_CLI}, or start it if it is already installed"
-    echo "  2. Set DOCKER_CLI to an available CLI (docker or podman) in .env file"
-    exit 1
-fi
-
-# Export so that run_with_local_preparation.sh, run_with_external_repo.sh and
-# run_pipeline.py all use the same CLI without re-resolving it inconsistently.
-export DOCKER_CLI
-export DOCKER_RUN_EXTRA_ARGS="${DOCKER_RUN_EXTRA_ARGS:-}"
+# Priority: .env > environment variable > default (docker). Exported for
+# run_with_local_preparation.sh, run_with_external_repo.sh and run_pipeline.py.
+resolve_container_cli
 
 # ============================================================================
 # Argument Parsing
@@ -595,7 +531,7 @@ case "$SUBCOMMAND" in
             echo "  Output   : ${DATA_DIR:-data}/output-{timestamp}  (created at runtime)"
             if [ -z "$PHASE" ] || [ "$PHASE" = "generate" ]; then
                 echo "  Model    : ${AUTH_PROVIDER:-litellm} / ${MODEL_NAME:-}"
-                echo "  Image    : ${IMAGE_NAME:-terraform-pac-agent-skills}:${IMAGE_TAG:-latest}"
+                echo "  Image    : ${IMAGE_NAME:-docker.io/hashicorp/terraform-policy-agent}:${IMAGE_TAG:-0.0.33}"
             fi
             echo "=========================================="
             echo ""
@@ -640,5 +576,3 @@ case "$SUBCOMMAND" in
         exit 1
         ;;
 esac
-
-# Made with Bob

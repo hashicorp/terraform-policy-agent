@@ -1,5 +1,6 @@
 #!/bin/bash
 # Copyright IBM Corp. 2026
+# SPDX-License-Identifier: MPL-2.0
 
 set -euo pipefail
 
@@ -43,13 +44,13 @@ if ! command -v "${DOCKER_CLI}" >/dev/null 2>&1; then
     exit 1
 fi
 
-PREFIX="terraform-pac-agent-skills"
+PREFIX="terraform-policy-agent-skills"
 FORCE=false
 
 show_usage() {
     echo "Usage: $0 [--force] [prefix]"
     echo ""
-    echo "Stop Terraform PAC Agent containers by name prefix."
+    echo "Stop Terraform Policy Agent containers by name prefix."
     echo "This is a fallback cleanup command for running or orphaned containers."
     echo ""
     echo "Options:"
@@ -57,12 +58,12 @@ show_usage() {
     echo "  --help     Show this help message"
     echo ""
     echo "Arguments:"
-    echo "  prefix     Container name prefix (default: terraform-pac-agent-skills)"
+    echo "  prefix     Container name prefix (default: terraform-policy-agent-skills)"
     echo ""
     echo "Examples:"
     echo "  $0"
     echo "  $0 --force"
-    echo "  $0 terraform-pac-agent-skills"
+    echo "  $0 terraform-policy-agent-skills"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -107,5 +108,3 @@ done <<< "${running_containers}"
 
 echo ""
 echo "Done."
-
-# Made with Bob

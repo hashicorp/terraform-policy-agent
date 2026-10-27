@@ -1,6 +1,7 @@
 ---
 name: tfpac-run
-description: Run policy conversion pipeline (run after setup). Operates the Terraform Policy Automation agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
+description: Run policy conversion pipeline (run after setup). Operates the Terraform Policy Agent end to end. Use when checking prerequisites, preparing input guidance, running ./run.sh, reviewing DATA_DIR/OUTPUT_DIR logs, or answering questions about generated Terraform policy artifacts.
+license: MPL-2.0
 ---
 
 # Single-policy mode
@@ -59,9 +60,9 @@ After running this command, interpret every environment variable as its actual r
 
 You only need to interpret the instructions with substituted values — never modify the skill file itself.
 
-# Operating Terraform PAC Pipeline
+# Operating the Terraform Policy Agent Pipeline
 
-Use this skill when working with the Terraform Policy Automation pipeline in this repository.
+Use this skill when working with the Terraform Policy Agent pipeline in this repository.
 
 Follow this workflow in order:
 
@@ -115,14 +116,13 @@ Look for the status line at the top of the report:
 
 Review the error messages and provide concise guidance. Common issues and fixes:
 
-- **Container image not found** → Login to IBM Cloud Container Registry (`<DOCKER_CLI> login icr.io -u iamapikey`) and pull the image, where `<DOCKER_CLI>` is the value of `DOCKER_CLI` in `.env` (`docker` by default, `podman` if configured)
+- **Container image not found** → Pull the image from Docker Hub (no login needed): `<DOCKER_CLI> pull <IMAGE_NAME>:<IMAGE_TAG>`, where `<DOCKER_CLI>` is the value of `DOCKER_CLI` in `.env` (`podman` recommended, `docker` also supported) and `IMAGE_NAME` / `IMAGE_TAG` come from `.env`
 - **Environment variables missing** → Add required variables (MODEL_NAME, AUTH_PROVIDER, etc.) to `.env` file
-- **Binary not found** → Obtain binaries from HashiCorp representative or update TERRAFORM_BINARY_PATH/TFPOLICY_BINARY_PATH in `.env`
+- **Binary not found** → Download Linux binaries from https://releases.hashicorp.com/terraform and https://releases.hashicorp.com/tfpolicy (tfpolicy 0.3.0 or later), or point TERRAFORM_BINARY_PATH/TFPOLICY_BINARY_PATH in `.env` at your own copies
 - **Binary not executable** → Run `chmod +x <path>` to add execute permission
-- **Binary arch mismatch** → Binary CPU architecture does not match the container image; obtain the correct architecture binary (e.g. `arm64` vs `amd64`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
-- **Binary OS mismatch** → Binary OS does not match the container image (e.g. `macos` binary used with a `linux` image); obtain the correct OS binary (`linux`) from your HashiCorp representative and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
-- **MCP server not available** → Start MCP server with: `<DOCKER_CLI> run -d --name terraform-mcp-server -p 8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:1.1.0` (the `pre-check.sh` report already prints this line with the configured CLI substituted)
-- **Database not found** → Run crawler workflow first or update POLICY_DB path in `.env`
+- **Binary arch mismatch** → Binary CPU architecture does not match the container image; download the correct architecture binary (e.g. `arm64` vs `amd64`) from https://releases.hashicorp.com or use your own matching copy, and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
+- **Binary OS mismatch** → Binary OS does not match the container image (e.g. `macos` binary used with a `linux` image); download the correct OS binary (`linux`) from https://releases.hashicorp.com or use your own matching copy, and update `TERRAFORM_BINARY_PATH`/`TFPOLICY_BINARY_PATH` in `.env`
+- **MCP server not available** → Start MCP server with: `<DOCKER_CLI> run -d --name terraform-mcp-server -p 127.0.0.1:8500:8080 -e TRANSPORT_MODE=streamable-http -e TRANSPORT_HOST=0.0.0.0 -e MCP_SESSION_MODE=stateless --restart unless-stopped docker.io/hashicorp/terraform-mcp-server:1.1.0` (the `pre-check.sh` report already prints this line with the configured CLI substituted)
 - **OUTPUT_DIR not empty** → Delete its contents or set a new OUTPUT_DIR in `.env` before running the pipeline
 - **API credentials invalid** → Re-enter correct API key, token, or model name in `.env`
 

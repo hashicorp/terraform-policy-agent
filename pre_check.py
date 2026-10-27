@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright IBM Corp. 2026
+# SPDX-License-Identifier: MPL-2.0
 
 import json
 import os
@@ -159,7 +160,7 @@ def check_mcp_server_health(image: str, docker_cli: str = "docker", extra_args: 
 
 
 def find_terraform_pac_agent_image(docker_cli: str = "docker") -> dict:
-    """Find terraform-pac-agent image with any tag"""
+    """Find terraform-policy-agent (or legacy terraform-pac-agent) images with any tag"""
     try:
         result = subprocess.run(
             [docker_cli, "images", "--format", "{{.Repository}}:{{.Tag}}"],
@@ -171,8 +172,8 @@ def find_terraform_pac_agent_image(docker_cli: str = "docker") -> dict:
         if result.returncode != 0:
             return {"found": False, "images": []}
         
-        # Match terraform-pac-agent images with any tag
-        pattern = re.compile(r".*terraform-pac-agent.*:.*")
+        # Match terraform-policy-agent images (and the legacy terraform-pac-agent name) with any tag
+        pattern = re.compile(r".*terraform-(policy|pac)-agent.*:.*")
         images = [
             line.strip() for line in result.stdout.splitlines()
             if pattern.match(line.strip())
@@ -406,7 +407,7 @@ def check_working_directory_path(cwd: Path) -> bool:
 def print_interactive_report(result: dict) -> None:
     """Print user-friendly interactive report"""
     print("\n" + "=" * 70)
-    print("  Terraform PaC Agent - Pre-flight Check Report")
+    print("  Terraform Policy Agent - Pre-flight Check Report")
     print("=" * 70 + "\n")
     
     # Overall status
@@ -540,11 +541,11 @@ def print_interactive_report(result: dict) -> None:
                 print(f"                   Checked using: {checks['mcp_check_image']}")
             print(f"                   Help: Start MCP server with:")
             print(f"                         {docker_cli} run -d --name terraform-mcp-server \\")
-            print(f"                           -p 8500:8080 \\")
+            print(f"                           -p 127.0.0.1:8500:8080 \\")
             print(f"                           -e TRANSPORT_MODE=streamable-http \\")
             print(f"                           -e TRANSPORT_HOST=0.0.0.0 \\")
             print(f"                           -e MCP_SESSION_MODE=stateless \\")
-            print(f"                           hashicorp/terraform-mcp-server:1.1.0")
+            print(f"                           docker.io/hashicorp/terraform-mcp-server:1.1.0")
     
     # 7. Policy Database (subcommand: database)
     if "policy_db_configured" in checks:
@@ -959,7 +960,7 @@ def main() -> int:
 
     # Container image check
     if "all" in check_targets or "image" in check_targets:
-        # Check for terraform-pac-agent image (any version)
+        # Check for terraform-policy-agent image (any version)
         pac_agent_images = find_terraform_pac_agent_image(docker_cli)
         result["checks"]["terraform_pac_agent_images"] = pac_agent_images
         
@@ -970,7 +971,7 @@ def main() -> int:
         
         if not result["checks"]["docker_image_exists"]:
             if pac_agent_images["found"]:
-                result["warnings"].append(f"Specified image not found: {image}, but other terraform-pac-agent images are available: {', '.join(pac_agent_images['images'][:3])}")
+                result["warnings"].append(f"Specified image not found: {image}, but other terraform-policy-agent images are available: {', '.join(pac_agent_images['images'][:3])}")
             else:
                 result["ok"] = False
                 result["errors"].append(f"container image not found: {image}")
@@ -1058,8 +1059,14 @@ def main() -> int:
             print_interactive_report(result)
         return 0 if result["ok"] else 1
 
+    # Mode-specific checks: for `all`, only check the mode that is actually
+    # configured (EXTERNAL_REPO_DIR set -> external, otherwise local) so that the
+    # report never shows a red check for the mode the user is not using.
+    # Explicit `local` / `external` subcommands always run their check.
+    _external_configured = bool(env.get("EXTERNAL_REPO_DIR", "").strip())
+
     # Local mode check.
-    if "all" in check_targets or "local" in check_targets:
+    if "local" in check_targets or ("all" in check_targets and not _external_configured):
         external_repo_dir_val = env.get("EXTERNAL_REPO_DIR")
         is_local = not bool(external_repo_dir_val)
         result["checks"]["is_local_mode"] = is_local
@@ -1083,7 +1090,7 @@ def main() -> int:
 
 
     # External mode check
-    if "all" in check_targets or "external" in check_targets:
+    if "external" in check_targets or ("all" in check_targets and _external_configured):
         external_repo_dir_val = env.get("EXTERNAL_REPO_DIR", "").strip()
         ext_set = bool(external_repo_dir_val)
         ext_exists = Path(external_repo_dir_val).exists() if ext_set else False
@@ -1133,5 +1140,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-# Made with Bob
