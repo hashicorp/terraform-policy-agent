@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # Copyright IBM Corp. 2026
+# SPDX-License-Identifier: MPL-2.0
 
 """
-Terraform Policy Automation Agent Skills - Pipeline Execution Script
+Terraform Policy Agent - Pipeline Execution Script
 
 This script automates the execution of all stages in the policy generation pipeline:
 - Stage 0: Policy Extraction
@@ -41,7 +42,7 @@ from datetime import datetime
 
 
 class PipelineExecutor:
-    """Executes the Terraform PAC Agent Skills pipeline"""
+    """Executes the Terraform Policy Agent pipeline"""
     
     def __init__(self, script_dir: Path):
         # script_dir is the directory where run_pipeline.py is located
@@ -101,7 +102,7 @@ class PipelineExecutor:
         self.enable_stage4 = os.getenv("ENABLE_STAGE4", "false").lower() in ("true", "1", "yes")
         
         # Container configuration
-        self.container_prefix = os.getenv("CONTAINER_PREFIX", "terraform-pac-agent-skills")
+        self.container_prefix = os.getenv("CONTAINER_PREFIX", "terraform-policy-agent-skills")
 
         # Container CLI (docker or podman). run.sh resolves this from .env and exports it,
         # so os.getenv already reflects the .env value when invoked through run.sh.
@@ -322,6 +323,11 @@ class PipelineExecutor:
             # Stream output to both console and log file with timeout
             start_time = time.time()
             last_heartbeat = 0.0  # F-L11: track last heartbeat elapsed time
+            # HEARTBEAT_INTERVAL: seconds between progress lines (0 = disabled, default 30)
+            try:
+                heartbeat_interval = max(0, int(os.getenv("HEARTBEAT_INTERVAL", "30")))
+            except ValueError:
+                heartbeat_interval = 30
 
             # Use select for non-blocking I/O with timeout support
             import select
@@ -363,10 +369,10 @@ class PipelineExecutor:
                     return False
 
                 # F-L11: Print heartbeat every 10 seconds when not in verbose mode
-                if not verbose:
-                    if elapsed - last_heartbeat >= 10:
-                        display_elapsed = int(elapsed // 10) * 10
-                        print(f"  ⏳ {stage_name} — running ({display_elapsed}s / {timeout_seconds}s timeout)...", flush=True)
+                if not verbose and heartbeat_interval > 0:
+                    if elapsed - last_heartbeat >= heartbeat_interval:
+                        display_elapsed = int(elapsed // heartbeat_interval) * heartbeat_interval
+                        print(f"  ⏳ {stage_name} — running ({display_elapsed}s elapsed)...", flush=True)
                         last_heartbeat = elapsed
 
                 # Check if process has finished
@@ -1417,7 +1423,7 @@ class PipelineExecutor:
             True if all stages successful, False otherwise
         """
         print("\n" + "="*80)
-        print("Terraform Policy Automation Agent Skills - Full Pipeline")
+        print("Terraform Policy Agent - Full Pipeline")
         if resume:
             print("▶  Resume mode: completed stages will be skipped")
         print("="*80)
@@ -1850,5 +1856,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Made with Bob

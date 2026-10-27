@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/hashicorp/terraform-policy-agent/security/policy
+    about: Do not open a public issue for security-sensitive reports. Read SECURITY.md for how to report them.
+  - name: User Guide and Troubleshooting
+    url: https://github.com/hashicorp/terraform-policy-agent/blob/main/TROUBLESHOOTING.md
+    about: Setup walkthrough and fixes for known errors.

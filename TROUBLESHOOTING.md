@@ -51,7 +51,7 @@ If you suspect a token has been leaked (e.g. visible in a screenshot, committed 
 ### GitHub Copilot token
 
 1. Go to [https://github.com/settings/tokens](https://github.com/settings/tokens)
-2. Find the token (look for tokens starting with `ghu_` or `ghp_`)
+2. Find the token (look for tokens starting with `gho_`)
 3. Click **Delete** to revoke it
 4. Re-acquire new tokens by following the [**"How to get GitHub Copilot tokens"** section in the README](./README.md#how-to-get-github-copilot-tokens)
 5. Update `GITHUB_COPILOT_ACCESS_TOKEN` (and optionally `GITHUB_COPILOT_REFRESH_TOKEN`) in your `.env` file

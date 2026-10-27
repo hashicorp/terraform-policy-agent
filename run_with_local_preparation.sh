@@ -1,5 +1,6 @@
 #!/bin/bash
 # Copyright IBM Corp. 2026
+# SPDX-License-Identifier: MPL-2.0
 
 set -e
 
@@ -16,28 +17,6 @@ cleanup() {
 
 # Register cleanup on script exit (normal exit, SIGINT, SIGTERM)
 trap cleanup EXIT INT TERM
-
-# Function to resolve path (handle both absolute and relative paths)
-resolve_path() {
-    local path="$1"
-    local path_type="$2"  # "directory" or "file"
-    
-    if [[ "$path" = /* ]]; then
-        # Absolute path
-        echo "$path"
-    else
-        # Relative path
-        if [ "$path_type" = "directory" ]; then
-            # For directories
-            echo "$(cd "$path" 2>/dev/null && pwd)" || echo "$(pwd)/${path}"
-        else
-            # For files
-            local dir=$(dirname "$path")
-            local file=$(basename "$path")
-            echo "$(cd "$dir" 2>/dev/null && pwd)/${file}"
-        fi
-    fi
-}
 
 # Simple wrapper for running OpenCode skills in Docker
 # Usage: ./docker/run.sh [skill] [options]
@@ -67,69 +46,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PACKAGE_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
+# Shared helpers (resolve_path, load_env_file, resolve_container_cli, ...)
+source "${SCRIPT_DIR}/common.sh"
+
 # Preserve environment variables that should not be overridden by .env
-PRESERVED_CONTAINER_NAME="${CONTAINER_NAME}"
-PRESERVED_DATA_DIR="${DATA_DIR}"
-PRESERVED_INPUT_DIR="${INPUT_DIR}"
-PRESERVED_OUTPUT_DIR="${OUTPUT_DIR}"
-PRESERVED_INPUT_FILE="${INPUT_FILE}"
-PRESERVED_LOCAL_SKILLS_DIR="${LOCAL_SKILLS_DIR}"
+ENV_OVERRIDABLE_VARS=(CONTAINER_NAME DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE LOCAL_SKILLS_DIR)
+preserve_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # Load environment variables from .env file if it exists
 # Priority: 1. Current directory, 2. Project root, 3. Package root
-if [ -f ".env" ]; then
-    echo "Loading environment variables from $(pwd)/.env..."
-    set -a
-    source ".env"
-    set +a
-elif [ -f "${PROJECT_ROOT}/.env" ]; then
-    echo "Loading environment variables from ${PROJECT_ROOT}/.env..."
-    set -a
-    source "${PROJECT_ROOT}/.env"
-    set +a
-elif [ -f "${PACKAGE_ROOT}/.env" ]; then
-    echo "Loading environment variables from ${PACKAGE_ROOT}/.env..."
-    set -a
-    source "${PACKAGE_ROOT}/.env"
-    set +a
-fi
+load_env_file true "${PROJECT_ROOT}" "${PACKAGE_ROOT}" || true
 
 # Restore preserved variables if they were already set
-[ -n "$PRESERVED_CONTAINER_NAME" ] && CONTAINER_NAME="$PRESERVED_CONTAINER_NAME"
-[ -n "$PRESERVED_DATA_DIR" ] && DATA_DIR="$PRESERVED_DATA_DIR"
-[ -n "$PRESERVED_INPUT_DIR" ] && INPUT_DIR="$PRESERVED_INPUT_DIR"
-[ -n "$PRESERVED_OUTPUT_DIR" ] && OUTPUT_DIR="$PRESERVED_OUTPUT_DIR"
-[ -n "$PRESERVED_INPUT_FILE" ] && INPUT_FILE="$PRESERVED_INPUT_FILE"
-[ -n "$PRESERVED_LOCAL_SKILLS_DIR" ] && LOCAL_SKILLS_DIR="$PRESERVED_LOCAL_SKILLS_DIR"
+restore_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
-# Resolve the container CLI used to run the agent (docker or podman).
-# Priority: .env > environment variable > default (docker)
-#
-# This is resolved here as well as in run.sh, because this script can be invoked
-# directly and must not depend on run.sh having exported the value.
-#
-# DOCKER_CLI is deliberately NOT in the PRESERVED_* list above: a value set in
-# .env is meant to win over an exported environment variable, so that .env stays
-# the single place where the container CLI is configured.
-DOCKER_CLI="${DOCKER_CLI:-docker}"
+# Resolve the container CLI (docker or podman); also done in run.sh, because this
+# script can be invoked directly and must not depend on run.sh having exported it.
+resolve_container_cli
 
-if ! command -v "${DOCKER_CLI}" >/dev/null 2>&1; then
-    echo "ERROR: Container CLI '${DOCKER_CLI}' not found in PATH"
-    echo ""
-    echo "Please choose one of the following options:"
-    echo "  1. Install ${DOCKER_CLI}, or start it if it is already installed"
-    echo "  2. Set DOCKER_CLI to an available CLI (docker or podman) in .env file"
-    exit 1
-fi
-
-# Export so that run_pipeline.py uses the same CLI for its container cleanup.
-export DOCKER_CLI
-export DOCKER_RUN_EXTRA_ARGS="${DOCKER_RUN_EXTRA_ARGS:-}"
-
-IMAGE_NAME="${IMAGE_NAME:-terraform-pac-agent-skills}"
-IMAGE_TAG="${IMAGE_TAG:-latest}"
+IMAGE_NAME="${IMAGE_NAME:-docker.io/hashicorp/terraform-policy-agent}"
+IMAGE_TAG="${IMAGE_TAG:-0.0.33}"
 # Use CONTAINER_PREFIX if CONTAINER_NAME is not set
-CONTAINER_PREFIX="${CONTAINER_PREFIX:-terraform-pac-agent-skills}"
+CONTAINER_PREFIX="${CONTAINER_PREFIX:-terraform-policy-agent-skills}"
 CONTAINER_NAME="${CONTAINER_NAME:-${CONTAINER_PREFIX}}"
 
 # Check if container with the same name is already running
@@ -530,7 +468,7 @@ esac
 # Check if image exists
 if ! "${DOCKER_CLI}" image inspect "${IMAGE_NAME}:${IMAGE_TAG}" >/dev/null 2>&1; then
     echo "ERROR: Container image '${IMAGE_NAME}:${IMAGE_TAG}' not found"
-    echo "Please run './docker/build.sh' first"
+    echo "Pull it with: ${DOCKER_CLI} pull ${IMAGE_NAME}:${IMAGE_TAG}"
     exit 1
 fi
 
@@ -636,7 +574,7 @@ echo "=========================================="
 if [ "$DRYRUN" = true ]; then
     echo "Dry-Run Mode: Container Command"
 else
-    echo "Running Terraform PaC Agent Skill"
+    echo "Running Terraform Policy Agent Skill"
 fi
 echo "=========================================="
 echo "Input : ${DATA_DIR_RESOLVED}/${INPUT_DIR}/${INPUT_FILE}"
@@ -663,73 +601,104 @@ case "${AUTH_PROVIDER:-litellm}" in
         ;;
 esac
 
-# Build environment variables based on AUTH_PROVIDER
-ENV_VARS="-e MODEL_NAME=\"${MODEL_NAME}\" -e OUTPUT_DIR=\"${CONTAINER_OUTPUT_DIR}\" -e OPENCODE_MODEL=\"${OPENCODE_MODEL}\""
+# Secrets are passed to the container by NAME only (`-e VAR`), never by value, so
+# they do not appear in the printed (--dryrun) command, in `ps` output, or in
+# `docker inspect` of the command line. The container runtime reads the values
+# from this script's environment, so make sure they are exported.
+export GITHUB_COPILOT_ACCESS_TOKEN GITHUB_COPILOT_REFRESH_TOKEN MODEL_API_KEY
 
-# Add AUTH_PROVIDER if set
-if [ -n "${AUTH_PROVIDER:-}" ]; then
-    ENV_VARS="$ENV_VARS -e AUTH_PROVIDER=\"${AUTH_PROVIDER}\""
+# Build the container command ONCE as an argument array.
+# Binaries are mounted to /tmp and copied to /usr/local/bin by entrypoint.sh for concurrent safety.
+# Input is mounted read-only, output read-write.
+DOCKER_ARGS=("${DOCKER_CLI}" run --rm --name "${CONTAINER_NAME}" --add-host=host.docker.internal:host-gateway)
+
+# Host-specific flags from .env (e.g. --security-opt label=disable on SELinux hosts).
+# Split with shell-style quoting (shlex), so values containing spaces can be quoted:
+#   DOCKER_RUN_EXTRA_ARGS='-v "/path with spaces:/data"'
+# The value is parsed, never evaluated, so $(...) and backticks are not executed.
+if [ -n "${DOCKER_RUN_EXTRA_ARGS:-}" ]; then
+    # Validate first so a quoting mistake fails loudly instead of being dropped.
+    if ! python3 -c 'import shlex, sys; shlex.split(sys.argv[1])' "${DOCKER_RUN_EXTRA_ARGS}" 2>/dev/null; then
+        echo "ERROR: could not parse DOCKER_RUN_EXTRA_ARGS (unbalanced quotes?): ${DOCKER_RUN_EXTRA_ARGS}" >&2
+        exit 1
+    fi
+    while IFS= read -r -d '' _arg; do
+        DOCKER_ARGS+=("$_arg")
+    done < <(python3 -c 'import shlex, sys; sys.stdout.write("".join(a + "\0" for a in shlex.split(sys.argv[1])))' "${DOCKER_RUN_EXTRA_ARGS}")
 fi
 
-# Add provider-specific environment variables
-case "${AUTH_PROVIDER:-litellm}" in
-    github-copilot)
-        # GitHub Copilot requires OAuth tokens
-        if [ -n "${GITHUB_COPILOT_ACCESS_TOKEN:-}" ]; then
-            ENV_VARS="$ENV_VARS -e GITHUB_COPILOT_ACCESS_TOKEN=\"${GITHUB_COPILOT_ACCESS_TOKEN}\""
-        fi
-        if [ -n "${GITHUB_COPILOT_REFRESH_TOKEN:-}" ]; then
-            ENV_VARS="$ENV_VARS -e GITHUB_COPILOT_REFRESH_TOKEN=\"${GITHUB_COPILOT_REFRESH_TOKEN}\""
-        fi
-        if [ -n "${GITHUB_COPILOT_EXPIRES:-}" ]; then
-            ENV_VARS="$ENV_VARS -e GITHUB_COPILOT_EXPIRES=\"${GITHUB_COPILOT_EXPIRES}\""
-        fi
-        ;;
-    amazon-bedrock)
-        # Amazon Bedrock requires API key (Bearer Token)
-        ENV_VARS="$ENV_VARS -e MODEL_API_KEY=\"${MODEL_API_KEY}\""
-        ;;
-    litellm|*)
-        # LiteLLM requires base URL and API key
-        ENV_VARS="$ENV_VARS -e MODEL_BASE_URL=\"${MODEL_BASE_URL}\" -e MODEL_API_KEY=\"${MODEL_API_KEY}\""
-        ;;
-esac
+DOCKER_ARGS+=(
+    -v "${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro"
+    -v "${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro"
+    -v "${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro"
+    -v "${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}"
+)
 
-# Build LOCAL_SKILLS_DIR mount option for dry-run display
-LOCAL_SKILLS_MOUNT_DISPLAY=""
+# Mount local skills directory if specified (overrides image's skills)
 if [ -n "${LOCAL_SKILLS_DIR:-}" ]; then
     LOCAL_SKILLS_DIR_RESOLVED=$(resolve_path "$LOCAL_SKILLS_DIR" "directory")
     if [ -d "$LOCAL_SKILLS_DIR_RESOLVED" ]; then
-        LOCAL_SKILLS_MOUNT_DISPLAY="  -v \"${LOCAL_SKILLS_DIR_RESOLVED}:/workspace/.opencode/skills\" \\\\\n"
-        LOCAL_SKILLS_MOUNT_DISPLAY="${LOCAL_SKILLS_MOUNT_DISPLAY}  -v \"${LOCAL_SKILLS_DIR_RESOLVED}:/skills\" \\\\\n"
+        [ "$DRYRUN" = true ] || echo "Mounting local skills directory: ${LOCAL_SKILLS_DIR_RESOLVED}"
+        # Mount to both locations:
+        # - /workspace/.opencode/skills: Used by OpenCode
+        # - /skills: Used for cross-skill references
+        DOCKER_ARGS+=(
+            -v "${LOCAL_SKILLS_DIR_RESOLVED}:/workspace/.opencode/skills"
+            -v "${LOCAL_SKILLS_DIR_RESOLVED}:/skills"
+        )
+    else
+        [ "$DRYRUN" = true ] || echo "WARNING: LOCAL_SKILLS_DIR specified but not found: ${LOCAL_SKILLS_DIR}"
     fi
 fi
 
-# Build DOCKER_RUN_EXTRA_ARGS fragment for dry-run display
-# Must stay in sync with the DOCKER_RUN_CMD construction below: if only one of the
-# two includes the extra args, the dry-run output no longer matches what is run.
-EXTRA_ARGS_DISPLAY=""
-if [ -n "${DOCKER_RUN_EXTRA_ARGS:-}" ]; then
-    EXTRA_ARGS_DISPLAY="  ${DOCKER_RUN_EXTRA_ARGS} \\\\\n"
+DOCKER_ARGS+=(-e "MODEL_NAME=${MODEL_NAME}" -e "OUTPUT_DIR=${CONTAINER_OUTPUT_DIR}" -e "OPENCODE_MODEL=${OPENCODE_MODEL}")
+
+if [ -n "${AUTH_PROVIDER:-}" ]; then
+    DOCKER_ARGS+=(-e "AUTH_PROVIDER=${AUTH_PROVIDER}")
 fi
 
-DOCKER_CMD="${DOCKER_CLI} run --rm \\
-  --name \"${CONTAINER_NAME}\" \\
-  --add-host=host.docker.internal:host-gateway \\
-${EXTRA_ARGS_DISPLAY}  -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\" \\
-  -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\" \\
-  -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\" \\
-  -v \"${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}\" \\
-  ${LOCAL_SKILLS_MOUNT_DISPLAY}${ENV_VARS} \\
-  \"${IMAGE_NAME}:${IMAGE_TAG}\" \\
-  sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
+# Provider-specific environment variables (secrets by name only)
+case "${AUTH_PROVIDER:-litellm}" in
+    github-copilot)
+        # GitHub Copilot requires OAuth tokens
+        [ -n "${GITHUB_COPILOT_ACCESS_TOKEN:-}" ]  && DOCKER_ARGS+=(-e GITHUB_COPILOT_ACCESS_TOKEN)
+        [ -n "${GITHUB_COPILOT_REFRESH_TOKEN:-}" ] && DOCKER_ARGS+=(-e GITHUB_COPILOT_REFRESH_TOKEN)
+        [ -n "${GITHUB_COPILOT_EXPIRES:-}" ]       && DOCKER_ARGS+=(-e "GITHUB_COPILOT_EXPIRES=${GITHUB_COPILOT_EXPIRES}")
+        ;;
+    amazon-bedrock)
+        # Amazon Bedrock requires API key (Bearer Token)
+        DOCKER_ARGS+=(-e MODEL_API_KEY)
+        ;;
+    litellm|*)
+        # LiteLLM requires base URL and API key
+        DOCKER_ARGS+=(-e "MODEL_BASE_URL=${MODEL_BASE_URL}" -e MODEL_API_KEY)
+        ;;
+esac
+
+# Collapse newlines / repeated whitespace in the prompt into single spaces so it is
+# passed to `opencode run` as one line (this matches the behaviour of the previous
+# eval-based implementation, which word-split the command string).
+PROMPT_ONE_LINE="$(set -f; echo ${PROMPT})"
+
+CONTAINER_SCRIPT="opencode run '/${SKILL} ${PROMPT_ONE_LINE}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats"
+DOCKER_ARGS+=("${IMAGE_NAME}:${IMAGE_TAG}" sh -c "${CONTAINER_SCRIPT}")
 
 if [ "$DRYRUN" = true ]; then
-
-    # Print the command in dry-run mode
+    # Print the exact command, one flag per line, shell-quoted
     echo "Container command that would be executed:"
     echo ""
-    echo -e "$DOCKER_CMD"
+    _first=true
+    for _arg in "${DOCKER_ARGS[@]}"; do
+        if [ "$_first" = true ]; then
+            printf '%q' "$_arg"
+            _first=false
+        elif [[ "$_arg" == -* ]]; then
+            printf ' \\\n  %q' "$_arg"
+        else
+            printf ' %q' "$_arg"
+        fi
+    done
+    echo ""
     echo ""
     echo "=========================================="
     echo "ℹ️  Dry-run mode: Command not executed"
@@ -738,84 +707,13 @@ if [ "$DRYRUN" = true ]; then
     exit 0
 fi
 
-# Run the container with separate input/output mounts and binary mounts
-# Input: read-only mount (host's INPUT_DIR -> container's INPUT_DIR with same name)
-# Output: read-write mount (host's OUTPUT_DIR -> container's OUTPUT_DIR with same name)
-# Binaries: read-only mount to /tmp/host-binaries/ (copied to /usr/local/bin by entrypoint.sh)
-
-# Build container run command with environment variables
-DOCKER_RUN_CMD="${DOCKER_CLI} run --rm --name \"${CONTAINER_NAME}\" --add-host=host.docker.internal:host-gateway"
-
-# Host-specific flags from .env (e.g. --security-opt label=disable on SELinux hosts).
-# Inserted unquoted on purpose: the string is word-split by the eval below, so a
-# multi-word value such as '--security-opt label=disable' is passed as two arguments.
-if [ -n "${DOCKER_RUN_EXTRA_ARGS:-}" ]; then
-    DOCKER_RUN_CMD="$DOCKER_RUN_CMD ${DOCKER_RUN_EXTRA_ARGS}"
-fi
-
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TERRAFORM_BINARY_PATH_RESOLVED}:/tmp/host-binaries/terraform:ro\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${TFPOLICY_BINARY_PATH_RESOLVED}:/tmp/host-binaries/tfpolicy:ro\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${DATA_DIR_RESOLVED}/${INPUT_DIR}:${CONTAINER_INPUT_DIR}:ro\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${DATA_DIR_RESOLVED}/${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}\""
-
-# Mount local skills directory if specified (overrides image's skills)
-if [ -n "${LOCAL_SKILLS_DIR:-}" ]; then
-    LOCAL_SKILLS_DIR_RESOLVED=$(resolve_path "$LOCAL_SKILLS_DIR" "directory")
-    if [ -d "$LOCAL_SKILLS_DIR_RESOLVED" ]; then
-        echo "Mounting local skills directory: ${LOCAL_SKILLS_DIR_RESOLVED}"
-        # Mount to both locations:
-        # - /workspace/.opencode/skills: Used by OpenCode
-        # - /skills: Used for cross-skill references
-        DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${LOCAL_SKILLS_DIR_RESOLVED}:/workspace/.opencode/skills\""
-        DOCKER_RUN_CMD="$DOCKER_RUN_CMD -v \"${LOCAL_SKILLS_DIR_RESOLVED}:/skills\""
-    else
-        echo "WARNING: LOCAL_SKILLS_DIR specified but not found: ${LOCAL_SKILLS_DIR}"
-    fi
-fi
-
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e MODEL_NAME=\"${MODEL_NAME}\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e OUTPUT_DIR=\"${CONTAINER_OUTPUT_DIR}\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e OPENCODE_MODEL=\"${OPENCODE_MODEL}\""
-
-# Add AUTH_PROVIDER if set
-if [ -n "${AUTH_PROVIDER:-}" ]; then
-    DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e AUTH_PROVIDER=\"${AUTH_PROVIDER}\""
-fi
-
-# Add provider-specific environment variables
-case "${AUTH_PROVIDER:-litellm}" in
-    github-copilot)
-        # GitHub Copilot requires OAuth tokens
-        if [ -n "${GITHUB_COPILOT_ACCESS_TOKEN:-}" ]; then
-            DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e GITHUB_COPILOT_ACCESS_TOKEN=\"${GITHUB_COPILOT_ACCESS_TOKEN}\""
-        fi
-        if [ -n "${GITHUB_COPILOT_REFRESH_TOKEN:-}" ]; then
-            DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e GITHUB_COPILOT_REFRESH_TOKEN=\"${GITHUB_COPILOT_REFRESH_TOKEN}\""
-        fi
-        if [ -n "${GITHUB_COPILOT_EXPIRES:-}" ]; then
-            DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e GITHUB_COPILOT_EXPIRES=\"${GITHUB_COPILOT_EXPIRES}\""
-        fi
-        ;;
-    amazon-bedrock)
-        # Amazon Bedrock requires API key (Bearer Token)
-        DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e MODEL_API_KEY=\"${MODEL_API_KEY}\""
-        ;;
-    litellm|*)
-        # LiteLLM requires base URL and API key
-        DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e MODEL_BASE_URL=\"${MODEL_BASE_URL}\""
-        DOCKER_RUN_CMD="$DOCKER_RUN_CMD -e MODEL_API_KEY=\"${MODEL_API_KEY}\""
-        ;;
-esac
-
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD \"${IMAGE_NAME}:${IMAGE_TAG}\""
-DOCKER_RUN_CMD="$DOCKER_RUN_CMD sh -c \"opencode run '/${SKILL} ${PROMPT}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats\""
-
 # Execute the container run command
-if eval $DOCKER_RUN_CMD; then
+if "${DOCKER_ARGS[@]}"; then
     exit_code=0
 else
     exit_code=$?
 fi
+
 
 # Append footer to HCL files for step2-generation
 if [ $exit_code -eq 0 ] && [ "$SKILL" = "step2-generation" ]; then
@@ -879,5 +777,3 @@ echo "=========================================="
 echo ""
 
 exit $exit_code
-
-# Made with Bob

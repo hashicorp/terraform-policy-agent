@@ -4,7 +4,6 @@ venv
 __pycache__/
 __init__.py
 .DS_Store
-core
 
 result*/
 .sentinel/
@@ -15,16 +14,11 @@ goal.txt
 policy_goal.txt
 crawler_goal.txt
 output*/
-crawler/auto_created_scripts
-database/backups
 log/
 terraform
 tfpolicy
-LICENSE.txt
 data/
 input/
-step
-.roo/
 .vscode/
 
 !sample-data/input
