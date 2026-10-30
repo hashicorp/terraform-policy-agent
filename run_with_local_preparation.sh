@@ -549,8 +549,7 @@ if [ "$SKILL" = "step0-extraction" ] && [ "${SKIP_OUTPUT_DIR_CHECK:-}" != "1" ] 
                 1)
                     _TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
                     _BACKUP_DIR="${DATA_DIR_RESOLVED}/.backup/output_${_TIMESTAMP}"
-                    mkdir -p "${DATA_DIR_RESOLVED}/.backup"
-                    cp -r "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}"
+                    backup_output_dir "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}" || exit 1
                     echo "✅ Backed up to: ${_BACKUP_DIR}"
                     break
                     ;;

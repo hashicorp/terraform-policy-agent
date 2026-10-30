@@ -55,6 +55,36 @@ def paths_overlap(a: str, b: str) -> bool:
     return pa[:n] == pb[:n]
 
 
+SNAPSHOT_VERSION = 2
+
+
+def _raise_walk_error(err: OSError) -> None:
+    raise err
+
+
+def safe_copy_tree(src, dst, omit_terraform: bool = False) -> None:
+    """Copy a tree, refusing symlinks and special files; links are never dereferenced.
+
+    The scan plus copytree(symlinks=True) assumes nothing writes to src meanwhile.
+    """
+    src = str(src)
+    if os.path.islink(src):
+        raise ValueError(f"Refusing to copy symlinked directory: {src}")
+    for root, dirs, files in os.walk(src, followlinks=False, onerror=_raise_walk_error):
+        if omit_terraform:
+            dirs[:] = [d for d in dirs if d != ".terraform"]
+            files[:] = [f for f in files if f != ".terraform"]
+        for name in dirs + files:
+            path = os.path.join(root, name)
+            mode = os.lstat(path).st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"Refusing to copy symlink: {path}")
+            if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+                raise ValueError(f"Refusing to copy special file: {path}")
+    shutil.copytree(src, dst, symlinks=True,
+                    ignore=shutil.ignore_patterns(".terraform") if omit_terraform else None)
+
+
 class PipelineExecutor:
     """Executes the Terraform Policy Agent pipeline"""
     
@@ -124,6 +154,8 @@ class PipelineExecutor:
         
         # Track running containers for cleanup
         self.running_containers: Set[str] = set()
+        # Set when a container could not be confirmed removed; blocks all host copying.
+        self._unsafe_cleanup = False
         self.cleanup_registered = False
         
         # Validate environment
@@ -168,13 +200,14 @@ class PipelineExecutor:
                         import datetime
                         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                         backup_dir = self.data_dir / ".backup" / f"output_{timestamp}"
-                        import shutil as _shutil
-                        _shutil.copytree(self.output_dir, backup_dir)
+                        backup_dir.parent.mkdir(parents=True, exist_ok=True)
+                        safe_copy_tree(self.output_dir, backup_dir)
                         print(f"✅ Backed up to: {backup_dir}")
                         break
                     elif choice == "2":
-                        import shutil as _shutil
-                        _shutil.rmtree(self.output_dir)
+                        if self.output_dir.is_symlink():
+                            raise RuntimeError(f"Refusing to clean symlinked OUTPUT_DIR: {self.output_dir}")
+                        shutil.rmtree(self.output_dir)
                         print(f"🧹 Cleaned: {self.output_dir}")
                         break
                     elif choice == "3":
@@ -200,25 +233,29 @@ class PipelineExecutor:
             self.cleanup_registered = True
     
     def _check_log_root_not_overlapping_output(self):
-        """Reject absolute OUTPUT_DIR and OUTPUT_DIR/LOCAL_SKILLS_DIR mounts overlapping DATA_DIR/.logs.
+        """Reject absolute OUTPUT_DIR and OUTPUT_DIR/LOCAL_SKILLS_DIR mounts overlapping DATA_DIR/.logs, .checkpoint or .backup.
         DOCKER_RUN_EXTRA_ARGS mounts are not parsed."""
         if os.path.isabs(os.getenv("OUTPUT_DIR", "output")):
             raise ValueError(
                 f"OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: {os.getenv('OUTPUT_DIR')}"
             )
-        log_root = Path(os.path.realpath(self.data_dir / ".logs"))
+        for name in (".checkpoint", ".backup"):
+            if (self.data_dir / name).is_symlink():
+                raise ValueError(f"Refusing symlinked private directory: {self.data_dir / name}")
+        private_roots = [Path(os.path.realpath(self.data_dir / n)) for n in (".logs", ".checkpoint", ".backup")]
         mounts = [("OUTPUT_DIR", self.output_dir)]
         skills = os.getenv("LOCAL_SKILLS_DIR")
         if skills and os.path.isdir(skills):
             mounts.append(("LOCAL_SKILLS_DIR", Path(skills)))
         for label, mount in mounts:
             m = Path(os.path.realpath(mount))
-            if paths_overlap(str(m), str(log_root)):
-                raise ValueError(
-                    f"{label} ({m}) overlaps the private log directory ({log_root}). "
-                    "Choose a path that does not contain or sit inside DATA_DIR/.logs "
-                    "(for example, OUTPUT_DIR must not be '.')."
-                )
+            for root in private_roots:
+                if paths_overlap(str(m), str(root)):
+                    raise ValueError(
+                        f"{label} ({m}) overlaps the private directory ({root}). "
+                        "Choose a path that does not contain or sit inside DATA_DIR/.logs, "
+                        ".checkpoint or .backup (for example, OUTPUT_DIR must not be '.')."
+                    )
 
     def _create_private_log_dir(self) -> Path:
         """Create a unique 0700 run dir under the host-only DATA_DIR/.logs."""
@@ -304,6 +341,49 @@ class PipelineExecutor:
         
         print("✅ Cleanup complete\n")
     
+    def _force_remove_container(self, name: str) -> bool:
+        """True only if the engine confirms the container is gone (rm rc 0, or rm failed
+        but ps succeeds with no match). Otherwise copying and checkpointing stay blocked."""
+        ok = False
+        try:
+            r = subprocess.run([self.docker_cli, "rm", "-f", name],
+                               capture_output=True, timeout=30)
+            ok = r.returncode == 0
+            if not ok:
+                p = subprocess.run(
+                    [self.docker_cli, "ps", "-q", "--filter", f"name=^/?{re.escape(name)}$"],
+                    capture_output=True, timeout=30)
+                ok = p.returncode == 0 and not p.stdout.strip()
+        except Exception as e:
+            logger.error("container cleanup check failed for %s: %s", name, e)
+        if ok:
+            self.running_containers.discard(name)
+        else:
+            self._unsafe_cleanup = True
+            logger.error("could not confirm removal of container %s; "
+                         "host output will not be copied or checkpointed", name)
+        return ok
+
+    def _require_safe_cleanup(self) -> None:
+        if self._unsafe_cleanup:
+            raise RuntimeError(
+                "A container could not be confirmed removed; refusing to copy or checkpoint output. "
+                "Remove it manually (docker rm -f) and re-run.")
+
+    def _abort_run(self, process, container_name: str) -> None:
+        """After an abnormal error: stop the wrapper, always confirm the container is gone."""
+        if process is None:  # Popen never started, so no container exists
+            self.running_containers.discard(container_name)
+            return
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            if process.stdout:
+                process.stdout.close()
+        finally:
+            self._force_remove_container(container_name)
+
     def _clean_log_line(self, line: str) -> str:
         """
         Clean log line by removing ANSI escape sequences and excessive whitespace
@@ -373,6 +453,10 @@ class PipelineExecutor:
             container_name = f"{self.container_prefix}-{container_suffix}"
         
         log_handle = None
+        process = None
+        if self._unsafe_cleanup:
+            logger.error("[%s] not started: an earlier container could not be confirmed removed", stage_name)
+            return False
         try:
             # Open log file if specified
             if log_file:
@@ -444,8 +528,10 @@ class PipelineExecutor:
                         process.kill()
                         process.wait()
                     
-                    # Remove from tracking
-                    self.running_containers.discard(container_name)
+                    if process.stdout:
+                        process.stdout.close()
+                    # Confirm no container writer survives (also clears tracking)
+                    self._force_remove_container(container_name)
                     
                     timeout_msg = f"\n❌ {stage_name} timed out after {timeout_seconds} seconds ({timeout_seconds/60:.1f} minutes)\n"
                     print(timeout_msg)
@@ -498,6 +584,8 @@ class PipelineExecutor:
             
             # Get the return code (process has already finished)
             return_code = process.returncode
+            if process.stdout:
+                process.stdout.close()
             
             if log_handle:
                 log_handle.write(f"\n{'='*80}\n")
@@ -506,8 +594,10 @@ class PipelineExecutor:
                 log_handle.write(f"Execution time: {time.time() - start_time:.2f} seconds\n")
                 log_handle.close()
             
-            # Remove from tracking
-            self.running_containers.discard(container_name)
+            if return_code != 0:
+                self._force_remove_container(container_name)
+            else:
+                self.running_containers.discard(container_name)
             
             # Print completion message to console
             elapsed = time.time() - start_time
@@ -527,7 +617,7 @@ class PipelineExecutor:
             if log_handle and not log_handle.closed:
                 log_handle.write(timeout_msg)
                 log_handle.close()
-            self.running_containers.discard(container_name)
+            self._abort_run(process, container_name)
             return False
         except Exception as e:
             error_msg = f"\n❌ {stage_name} failed with error: {e}\n"
@@ -535,7 +625,7 @@ class PipelineExecutor:
             if log_handle and not log_handle.closed:
                 log_handle.write(error_msg)
                 log_handle.close()
-            self.running_containers.discard(container_name)
+            self._abort_run(process, container_name)
             return False
     
     def _verify_stage0_output(self) -> bool:
@@ -1463,34 +1553,67 @@ class PipelineExecutor:
         return {}
 
     def _save_checkpoint(self, stage: int, duration: float = 0.0, extra: dict = None) -> None:
-        """Save completed stage: write JSON metadata + snapshot output_dir into .checkpoint/stage{N}/."""
-        # Update JSON metadata
-        data = self._load_checkpoint()
-        data[f"stage{stage}_done"] = True
-        data[f"stage{stage}_completed_at"] = datetime.now().isoformat()
-        data[f"stage{stage}_duration"] = round(duration, 2)
-        data[f"stage{stage}_tokens"] = self._stage_tokens(stage)
-        if extra:
-            data.update(extra)
-        self._checkpoint_dir().mkdir(parents=True, exist_ok=True)
-        self._checkpoint_path().write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-        # Snapshot current output_dir into .checkpoint/stage{N}/
-        # Exclude .terraform directories (provider binaries / symlinks — not needed in snapshot)
+        """Snapshot output_dir into .checkpoint/stage{N}/, then write JSON metadata last."""
+        self._require_safe_cleanup()
+        cp_dir = self._checkpoint_dir()
+        if cp_dir.is_symlink():
+            raise RuntimeError(f"Refusing symlinked checkpoint directory: {cp_dir}")
+        cp_dir.mkdir(parents=True, exist_ok=True)
         snapshot = self._stage_snapshot_dir(stage)
-        if snapshot.exists():
-            shutil.rmtree(snapshot)
-        shutil.copytree(self.output_dir, snapshot,
-                        ignore=shutil.ignore_patterns(".terraform"))
+        # Private temp dir: a failed copy leaves the previous snapshot and JSON untouched
+        tmp = Path(tempfile.mkdtemp(prefix=f".stage{stage}-", dir=cp_dir))
+        try:
+            new_snap = tmp / "snapshot"
+            safe_copy_tree(self.output_dir, new_snap, omit_terraform=True)
+            old = tmp / "old"
+            had_old = os.path.lexists(snapshot)
+            if had_old:
+                os.rename(snapshot, old)
+            try:
+                os.rename(new_snap, snapshot)
+            except BaseException:
+                if had_old:
+                    os.rename(old, snapshot)
+                raise
+            data = self._load_checkpoint()
+            data[f"stage{stage}_done"] = True
+            data[f"stage{stage}_snapshot_version"] = SNAPSHOT_VERSION
+            data[f"stage{stage}_completed_at"] = datetime.now().isoformat()
+            data[f"stage{stage}_duration"] = round(duration, 2)
+            data[f"stage{stage}_tokens"] = self._stage_tokens(stage)
+            if extra:
+                data.update(extra)
+            fd, meta_tmp = tempfile.mkstemp(prefix=".checkpoint-", suffix=".json", dir=tmp)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            os.replace(meta_tmp, self._checkpoint_path())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def _restore_checkpoint(self, stage: int) -> None:
-        """Restore output_dir from .checkpoint/stage{N}/ snapshot."""
+        """Restore output_dir from .checkpoint/stage{N}/; fail closed on anything unexpected."""
+        self._require_safe_cleanup()
         snapshot = self._stage_snapshot_dir(stage)
-        if not snapshot.exists():
-            return
-        if self.output_dir.exists():
-            shutil.rmtree(self.output_dir)
-        shutil.copytree(snapshot, self.output_dir)
+        if self._load_checkpoint().get(f"stage{stage}_snapshot_version") != SNAPSHOT_VERSION:
+            raise RuntimeError(
+                f"Checkpoint for stage {stage} has no trusted snapshot version (legacy snapshots may "
+                f"contain copied host files). Delete {self._checkpoint_dir()} (and review "
+                f"{self.data_dir / '.backup'}) and start a fresh run.")
+        if self._checkpoint_dir().is_symlink() or snapshot.is_symlink() or not snapshot.is_dir():
+            raise RuntimeError(f"Checkpoint snapshot missing or unsafe: {snapshot}")
+        if self.output_dir.is_symlink():
+            raise RuntimeError(f"Refusing to restore over symlinked OUTPUT_DIR: {self.output_dir}")
+        # Validate the whole snapshot (copy to a scratch dir) before wiping the output
+        scratch = Path(tempfile.mkdtemp(prefix=".restore-", dir=self._checkpoint_dir()))
+        try:
+            staged = scratch / "out"
+            safe_copy_tree(snapshot, staged)
+            if self.output_dir.exists():
+                shutil.rmtree(self.output_dir)
+            self.output_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staged), str(self.output_dir))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def run_full_pipeline(self, resume: bool = False) -> bool:
         """

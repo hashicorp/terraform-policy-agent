@@ -154,12 +154,9 @@ class TestResumeMetrics(Base):
 
     def test_normal_run_counts_logs_and_stores_tokens_in_checkpoint(self):
         ex = self.make()
-        (ex.output_dir / "execution_metrics.json").symlink_to(self.sentinel)
         logs = {"stage0.log": tok(1, 2, 0.5, 3, 4), "stage1_0001.log": tok(10, 20, 1.0),
                 "stage2_0001.log": tok(100, 200, 2.0, 5, 6), "stage3.log": tok(7, 8, 0.25)}
         m, _ = self.run_pipeline(ex, False, logs)
-        self.assertEqual(self.sentinel.read_text(), "SAFE")
-        self.assertTrue((ex.output_dir / "execution_metrics.json").is_symlink())
         self.assertEqual(m['stage2_tokens'], 300)
         self.assertEqual(m['total_tokens_in'], 118)
         self.assertEqual(m['total_cost'], 3.75)
@@ -168,6 +165,15 @@ class TestResumeMetrics(Base):
         for n, key in enumerate(("stage0.log", "stage1_0001.log", "stage2_0001.log", "stage3.log")):
             self.assertEqual(cp[f"stage{n}_tokens"], logs[key])
 
+    def test_metrics_symlink_in_output_not_followed(self):
+        ex = self.make()
+        (ex.output_dir / "execution_metrics.json").symlink_to(self.sentinel)
+        with mock.patch.object(ex, "_save_checkpoint"):  # checkpointing refuses links; covered in test_private_copy
+            m, _ = self.run_pipeline(ex, False, {})
+        self.assertEqual(self.sentinel.read_text(), "SAFE")
+        self.assertTrue((ex.output_dir / "execution_metrics.json").is_symlink())
+        self.assertTrue((ex.log_dir / "execution_metrics.json").exists())
+
     def test_resume_uses_stored_tokens_for_skipped_and_logs_for_executed(self):
         ex = self.make()
         stored = {"stage0.log": tok(1, 2, 0.5, 3, 4), "stage1_0001.log": tok(10, 20, 1.0, 1, 1),
@@ -175,7 +181,10 @@ class TestResumeMetrics(Base):
         cp = {f"stage{n}_done": True for n in range(3)}
         for n, k in enumerate(stored):
             cp[f"stage{n}_tokens"] = stored[k]
+            cp[f"stage{n}_snapshot_version"] = 2
         ex._checkpoint_dir().mkdir(parents=True); ex._checkpoint_path().write_text(json.dumps(cp))
+        for n in range(3):
+            ex._stage_snapshot_dir(n).mkdir()
         poison = {k: tok(9999, 9999, 99.0, 9999, 9999) for k in stored}
         poison["stage3.log"] = tok(7, 8, 0.25, 2, 3)
         with self.assertNoLogs("run_pipeline", level="WARNING"):
@@ -189,7 +198,11 @@ class TestResumeMetrics(Base):
     def test_legacy_checkpoint_without_tokens_warns_and_reports_zero(self):
         ex = self.make()
         ex._checkpoint_dir().mkdir(parents=True)
-        ex._checkpoint_path().write_text(json.dumps({f"stage{n}_done": True for n in range(4)}))
+        cp = {f"stage{n}_done": True for n in range(4)}
+        cp.update({f"stage{n}_snapshot_version": 2 for n in range(4)})
+        ex._checkpoint_path().write_text(json.dumps(cp))
+        for n in range(4):
+            ex._stage_snapshot_dir(n).mkdir()
         with self.assertLogs("run_pipeline", level="WARNING") as cm:
             m, out = self.run_pipeline(ex, True, {})
         self.assertEqual(m['total_tokens'], 0)

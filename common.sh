@@ -31,23 +31,43 @@ resolve_path() {
     fi
 }
 
-# Fail if a host path that will be mounted into the container overlaps
-# DATA_DIR/.logs (the private, host-only log root) in either direction.
+# Fail if a mounted host path overlaps DATA_DIR/.logs, .checkpoint or .backup.
 # Usage: assert_not_overlapping_private_logs <data_dir_resolved> <label> <path>
 assert_not_overlapping_private_logs() {
     python3 - "$1" "$2" "$3" <<'PY' || exit 1
 import os, sys
 from pathlib import Path
 data, label, path = sys.argv[1:4]
-logs = os.path.realpath(os.path.join(data, ".logs"))
 p = os.path.realpath(path)
-# casefolded component-wise compare
-a, b = (tuple(c.casefold() for c in Path(x).parts) for x in (p, logs))
-if a[:len(b)] == b or b[:len(a)] == a:
-    print(f"ERROR: {label} ({p}) overlaps the private log directory ({logs}). "
-          f"Containers must never be able to write to DATA_DIR/.logs.", file=sys.stderr)
-    sys.exit(1)
+for name in (".logs", ".checkpoint", ".backup"):
+    root = os.path.realpath(os.path.join(data, name))
+    a, b = (tuple(c.casefold() for c in Path(x).parts) for x in (p, root))
+    if a[:len(b)] == b or b[:len(a)] == a:
+        print(f"ERROR: {label} ({p}) overlaps the private directory ({root}). "
+              f"Containers must never be able to write to DATA_DIR/{name}.", file=sys.stderr)
+        sys.exit(1)
 PY
+}
+
+# Back up a host output directory without following symlinks: refuse if it
+# contains any link (copying would otherwise read host files into the backup),
+# then copy with -P. Assumes no container is writing to the directory.
+# Usage: backup_output_dir <src> <dest>
+backup_output_dir() {
+    local src="$1" dest="$2" links
+    if [ -L "$src" ] || [ -L "$(dirname "$dest")" ]; then
+        echo "ERROR: refusing to back up through a symlink: ${src}" >&2
+        return 1
+    fi
+    if ! links=$(find -P "$src" -type l -print -quit); then
+        echo "ERROR: could not scan ${src} for symlinks; backup aborted" >&2
+        return 1
+    fi
+    if [ -n "$links" ]; then
+        echo "ERROR: output contains a symlink (${links}); backup refused. Remove it or choose Clean." >&2
+        return 1
+    fi
+    mkdir -p "$(dirname "$dest")" && cp -R -P "$src" "$dest"
 }
 
 # Remember the current value of variables that an .env file must not override
