@@ -35,10 +35,21 @@ import signal
 import atexit
 import re
 import json
+import stat
+import tempfile
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+
+
+def paths_overlap(a: str, b: str) -> bool:
+    """True if a equals, contains or lies inside b. Component-wise and casefolded, so
+    '.LOGS' aliases '.logs' (conservative: also rejects distinct names on case-sensitive hosts)."""
+    pa = tuple(c.casefold() for c in Path(a).parts)
+    pb = tuple(c.casefold() for c in Path(b).parts)
+    n = min(len(pa), len(pb))
+    return pa[:n] == pb[:n]
 
 
 class PipelineExecutor:
@@ -121,6 +132,10 @@ class PipelineExecutor:
         # is handled by run.sh before calling this script.
         # This avoids duplication and keeps validation logic in one place.
         
+        # Security: logs live in a host-only dir that must never overlap the
+        # container-writable OUTPUT_DIR mount. Check before creating anything.
+        self._check_log_root_not_overlapping_output()
+
         # Create input directory
         self.input_dir.mkdir(parents=True, exist_ok=True)
         
@@ -173,6 +188,7 @@ class PipelineExecutor:
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.goals_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir = self._create_private_log_dir()
         
         # Register cleanup handlers
         if not self.cleanup_registered:
@@ -181,6 +197,74 @@ class PipelineExecutor:
             signal.signal(signal.SIGTERM, self._signal_handler)
             self.cleanup_registered = True
     
+    def _check_log_root_not_overlapping_output(self):
+        """Reject absolute OUTPUT_DIR, and OUTPUT_DIR / LOCAL_SKILLS_DIR mounts that contain,
+        equal, or lie inside DATA_DIR/.logs. DOCKER_RUN_EXTRA_ARGS mounts are not parsed:
+        the trusted operator must not expose DATA_DIR/.logs or its ancestors there."""
+        if os.path.isabs(os.getenv("OUTPUT_DIR", "output")):
+            raise ValueError(
+                f"OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: {os.getenv('OUTPUT_DIR')}"
+            )
+        log_root = Path(os.path.realpath(self.data_dir / ".logs"))
+        mounts = [("OUTPUT_DIR", self.output_dir)]
+        # LOCAL_SKILLS_DIR is another writable mount; resolved like the shell (relative to cwd).
+        skills = os.getenv("LOCAL_SKILLS_DIR")
+        if skills and os.path.isdir(skills):
+            mounts.append(("LOCAL_SKILLS_DIR", Path(skills)))
+        for label, mount in mounts:
+            m = Path(os.path.realpath(mount))
+            if paths_overlap(str(m), str(log_root)):
+                raise ValueError(
+                    f"{label} ({m}) overlaps the private log directory ({log_root}). "
+                    "Choose a path that does not contain or sit inside DATA_DIR/.logs "
+                    "(for example, OUTPUT_DIR must not be '.')."
+                )
+
+    def _create_private_log_dir(self) -> Path:
+        """Create a unique 0700 run dir under DATA_DIR/.logs, never mounted into containers.
+
+        Assumes DATA_DIR and its ancestors are controlled by the host operator.
+        Containers only see DATA_DIR/<OUTPUT_DIR>, so they cannot plant symlinks here.
+        """
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        root = self.data_dir / ".logs"
+        root.mkdir(mode=0o700, exist_ok=True)  # exist_ok: tolerate concurrent creation
+        st = os.lstat(root)  # lstat: never follow a planted symlink; validated below
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
+                or st.st_mode & 0o022):
+            raise ValueError(
+                f"Unsafe log root {root}: must be a real directory owned by the current "
+                "user and not group/other-writable. Remove or fix it and retry."
+            )
+        return Path(tempfile.mkdtemp(prefix="run-", dir=root))
+
+    def _log_path(self, stage: str, index: Optional[int] = None, retry: bool = False) -> Path:
+        """Flat host-generated log path: <stage>[_<index>][_retry].log (no untrusted names)."""
+        name = stage + (f"_{index:04d}" if index is not None else "") + ("_retry" if retry else "")
+        return self.log_dir / f"{name}.log"
+
+    def _stage_logs(self, stage: str) -> List[Path]:
+        """Initial-attempt logs for a stage (retry logs excluded, as before)."""
+        logs = list(self.log_dir.glob(f"{stage}_*.log")) + list(self.log_dir.glob(f"{stage}.log"))
+        return sorted(p for p in logs if not p.name.endswith("_retry.log"))
+
+    _TOKEN_KEYS = ('total_tokens_in', 'total_tokens_out', 'total_cost', 'cache_read', 'cache_write')
+
+    def _stage_tokens(self, stage: int) -> Dict:
+        """Aggregate token usage for a stage from this run's private logs."""
+        return self._collect_stage_token_metrics(f"stage{stage}", self._stage_logs(f"stage{stage}"))
+
+    def _stored_stage_tokens(self, checkpoint: dict, stage: int) -> Dict:
+        """Token usage saved in the host checkpoint for a skipped stage (zeros + warning if absent/invalid)."""
+        t = checkpoint.get(f"stage{stage}_tokens")
+        if (isinstance(t, dict) and all(
+                isinstance(t.get(k), (int, float)) and not isinstance(t.get(k), bool)
+                for k in self._TOKEN_KEYS)):
+            return {k: t[k] for k in self._TOKEN_KEYS}
+        print(f"  ⚠️  Stage {stage}: no token usage stored in checkpoint (created by an older version); "
+              f"earlier logs are unavailable, so Stage {stage} tokens are reported as 0 (totals are understated).")
+        return {k: 0 for k in self._TOKEN_KEYS}
+
     def _signal_handler(self, signum, frame):
         """Handle interrupt signals (Ctrl+C)"""
         print("\n\n⚠️  Interrupt received! Cleaning up containers...")
@@ -303,7 +387,7 @@ class PipelineExecutor:
             env = os.environ.copy()
             env['CONTAINER_NAME'] = container_name
             # Skip OUTPUT_DIR empty check when called from run_pipeline.py
-            # (run_pipeline.py creates log files in OUTPUT_DIR before calling run.sh)
+            # (OUTPUT_DIR may already hold generated artifacts; logs live in the private dir)
             env['SKIP_OUTPUT_DIR_CHECK'] = '1'
             env['SKIP_FAIL_OUTPUT_CLEANUP'] = '1'
             
@@ -699,7 +783,7 @@ class PipelineExecutor:
         print(f"Stage 0: Policy Extraction")
         print(f"{'='*80}\n")
         
-        log_file = self.output_dir / "stage0_extraction.log"
+        log_file = self._log_path("stage0")
         
         # Note: INPUT_FILE is read from .env, not passed as argument
         # Use configured timeout
@@ -736,8 +820,7 @@ class PipelineExecutor:
             Tuple of (goal_name, success, error_message)
         """
         goal_name = goal_file.stem
-        log_suffix = "_retry" if retry else ""
-        log_file = self.goals_dir / f"{goal_name}_stage1{log_suffix}.log"
+        log_file = self._log_path("stage1", index, retry)
         
         retry_label = " (retry)" if retry else ""
         print(f"  [{index}/{total}] Processing{retry_label}: {goal_file.name}")
@@ -888,8 +971,7 @@ class PipelineExecutor:
                         if success:
                             completed += 1
                             results[goal_name] = (success, error)
-                            log_suffix = "_retry" if is_retry else ""
-                            log_file = self.goals_dir / f"{goal_name}_stage1{log_suffix}.log"
+                            log_file = self._log_path("stage1", index, is_retry)
                             
                             # Identify and track the policy directory for this goal
                             policy_dir = self._identify_policy_directory_for_goal(goal_file, log_file)
@@ -997,8 +1079,7 @@ class PipelineExecutor:
         Returns:
             Tuple of (policy_name, success, error_message)
         """
-        log_suffix = "_retry" if retry else ""
-        log_file = self.output_dir / policy_dir / f"stage2_generation{log_suffix}.log"
+        log_file = self._log_path("stage2", index, retry)
         
         retry_label = " (retry)" if retry else ""
         print(f"  [{index}/{total}] Processing{retry_label}: {policy_dir}")
@@ -1109,8 +1190,7 @@ class PipelineExecutor:
                         if success:
                             completed += 1
                             results[policy_name] = (success, error)
-                            log_suffix = "_retry" if is_retry else ""
-                            log_file = self.output_dir / policy_name / f"stage2_generation{log_suffix}.log"
+                            log_file = self._log_path("stage2", index, is_retry)
                             print(f"  ✓ Completed{retry_label}: {policy_name} (log: {log_file})")
                         else:
                             # Check if we should retry
@@ -1161,8 +1241,7 @@ class PipelineExecutor:
         Returns:
             Tuple of (policy_name, success, error_message)
         """
-        log_suffix = "_retry" if retry else ""
-        log_file = self.output_dir / policy_dir / f"stage4_fixtures{log_suffix}.log"
+        log_file = self._log_path("stage4", index, retry)
         
         retry_label = " (retry)" if retry else ""
         print(f"  [{index}/{total}] Processing{retry_label}: {policy_dir}")
@@ -1209,8 +1288,7 @@ class PipelineExecutor:
         total_attempts = self.max_retries + 1
         for attempt in range(total_attempts):
             is_retry = attempt > 0
-            log_suffix = "_retry" if is_retry else ""
-            log_file = self.output_dir / f"stage3_summary{log_suffix}.log"
+            log_file = self._log_path("stage3", retry=is_retry)
 
             # Use increased timeout for retry (1.5x), same multiplier as Stage 2
             timeout_seconds = int(base_timeout * 1.5) if is_retry else base_timeout
@@ -1322,8 +1400,7 @@ class PipelineExecutor:
                         if success:
                             completed += 1
                             results[policy_name] = (success, error)
-                            log_suffix = "_retry" if is_retry else ""
-                            log_file = self.output_dir / policy_name / f"stage4_fixtures{log_suffix}.log"
+                            log_file = self._log_path("stage4", index, is_retry)
                             print(f"  ✓ Completed{retry_label}: {policy_name} (log: {log_file})")
                         else:
                             # Check if we should retry
@@ -1390,6 +1467,7 @@ class PipelineExecutor:
         data[f"stage{stage}_done"] = True
         data[f"stage{stage}_completed_at"] = datetime.now().isoformat()
         data[f"stage{stage}_duration"] = round(duration, 2)
+        data[f"stage{stage}_tokens"] = self._stage_tokens(stage)
         if extra:
             data.update(extra)
         self._checkpoint_dir().mkdir(parents=True, exist_ok=True)
@@ -1435,6 +1513,7 @@ class PipelineExecutor:
 
         checkpoint = self._load_checkpoint() if resume else {}
 
+        skipped_stages: Set[int] = set()  # stages whose tokens come from the checkpoint
         start_time = time.time()
 
         # Stage 0: Extraction
@@ -1442,6 +1521,7 @@ class PipelineExecutor:
         if checkpoint.get("stage0_done"):
             print("⏭️  Stage 0 already completed — skipping (Resuming from Stage 1)")
             stage0_duration = checkpoint.get("stage0_duration", 0.0)
+            skipped_stages.add(0)
             self._restore_checkpoint(0)
         else:
             if not self.stage0_extraction():
@@ -1462,6 +1542,7 @@ class PipelineExecutor:
                 and (d / "requirement.txt").exists()
             ]
             stage1_duration = checkpoint.get("stage1_duration", 0.0)
+            skipped_stages.add(1)
         else:
             stage1_success, successful_policy_dirs = self.stage1_requirement()
             if not stage1_success:
@@ -1478,6 +1559,7 @@ class PipelineExecutor:
         if checkpoint.get("stage2_done"):
             print("⏭️  Stage 2 already completed — skipping (Resuming from Stage 3)")
             stage2_duration = checkpoint.get("stage2_duration", 0.0)
+            skipped_stages.add(2)
             self._restore_checkpoint(2)
         else:
             stage2_success = self.stage2_generation(policy_dirs_filter=successful_policy_dirs)
@@ -1491,6 +1573,7 @@ class PipelineExecutor:
         if checkpoint.get("stage3_done"):
             print("⏭️  Stage 3 already completed — skipping")
             stage3_duration = checkpoint.get("stage3_duration", 0.0)
+            skipped_stages.add(3)
             self._restore_checkpoint(3)
         else:
             if not self.stage3_summary():
@@ -1535,12 +1618,13 @@ class PipelineExecutor:
             print(f"Stage 4 duration: {stage4_duration:.2f} seconds")
         print("-"*80)
         print(f"\nLogs location:")
-        print(f"  Stage 0: {self.output_dir}/stage0_extraction.log")
-        print(f"  Stage 1: {self.goals_dir}/goal-*_stage1.log")
-        print(f"  Stage 2: {self.output_dir}/<PolicyName>/stage2_generation.log")
-        print(f"  Stage 3: {self.output_dir}/stage3_summary.log")
+        print(f"  Private log directory: {self.log_dir}")
+        print(f"  Stage 0: {self.log_dir}/stage0.log")
+        print(f"  Stage 1: {self.log_dir}/stage1_<goal-index>.log")
+        print(f"  Stage 2: {self.log_dir}/stage2_<policy-index>.log")
+        print(f"  Stage 3: {self.log_dir}/stage3.log")
         if self.enable_stage4:
-            print(f"  Stage 4: {self.output_dir}/<PolicyName>/stage4_fixtures.log")
+            print(f"  Stage 4: {self.log_dir}/stage4_<policy-index>.log")
         print("="*80 + "\n")
         
 
@@ -1550,46 +1634,27 @@ class PipelineExecutor:
         print("="*80)
         
         # Stage 0: Extract from stage0_extraction.log
-        stage0_log = self.output_dir / "stage0_extraction.log"
-        stage0_tokens = self._extract_token_usage_from_log(str(stage0_log)) if stage0_log.exists() else {
-            'total_tokens_in': 0, 'total_tokens_out': 0, 'total_cost': 0, 'cache_read': 0, 'cache_write': 0
-        }
+        tokens = {n: (self._stored_stage_tokens(checkpoint, n) if n in skipped_stages
+                      else self._stage_tokens(n)) for n in range(4)}
+        stage0_tokens = tokens[0]
         print(f"Stage 0 tokens: {stage0_tokens['total_tokens_in']+stage0_tokens['total_tokens_out']:,} (In: {stage0_tokens['total_tokens_in']:,}, Out: {stage0_tokens['total_tokens_out']:,}, Cache Read: {stage0_tokens['cache_read']:,}, Cache Write: {stage0_tokens['cache_write']:,})")
         
         # Stage 1: Extract from all stage1_requirement_*.log files in goals directory
-        stage1_logs = []
-        if self.goals_dir.exists():
-            stage1_logs = list(self.goals_dir.glob("*_stage1.log"))
-        stage1_tokens = self._collect_stage_token_metrics("stage1", stage1_logs)
+        stage1_tokens = tokens[1]
         print(f"Stage 1 tokens: {stage1_tokens['total_tokens_in']+stage1_tokens['total_tokens_out']:,} (In: {stage1_tokens['total_tokens_in']:,}, Out: {stage1_tokens['total_tokens_out']:,}, Cache Read: {stage1_tokens['cache_read']:,}, Cache Write: {stage1_tokens['cache_write']:,})")
         
         # Stage 2: Extract from all stage2_generation.log files in policy directories
-        stage2_logs = []
-        for policy_dir in self.output_dir.iterdir():
-            if policy_dir.is_dir() and not policy_dir.name.startswith('.') and policy_dir.name != 'goals':
-                stage2_log = policy_dir / "stage2_generation.log"
-                if stage2_log.exists():
-                    stage2_logs.append(stage2_log)
-        stage2_tokens = self._collect_stage_token_metrics("stage2", stage2_logs)
+        stage2_tokens = tokens[2]
         print(f"Stage 2 tokens: {stage2_tokens['total_tokens_in']+stage2_tokens['total_tokens_out']:,} (In: {stage2_tokens['total_tokens_in']:,}, Out: {stage2_tokens['total_tokens_out']:,}, Cache Read: {stage2_tokens['cache_read']:,}, Cache Write: {stage2_tokens['cache_write']:,})")
         
         # Stage 3: Extract from stage3_summary.log
-        stage3_log = self.output_dir / "stage3_summary.log"
-        stage3_tokens = self._extract_token_usage_from_log(str(stage3_log)) if stage3_log.exists() else {
-            'total_tokens_in': 0, 'total_tokens_out': 0, 'total_cost': 0, 'cache_read': 0, 'cache_write': 0
-        }
+        stage3_tokens = tokens[3]
         print(f"Stage 3 tokens: {stage3_tokens['total_tokens_in']+stage3_tokens['total_tokens_out']:,} (In: {stage3_tokens['total_tokens_in']:,}, Out: {stage3_tokens['total_tokens_out']:,}, Cache Read: {stage3_tokens['cache_read']:,}, Cache Write: {stage3_tokens['cache_write']:,})")
         
         # Stage 4: Extract from all stage4_fixtures.log files in policy directories (if enabled)
         stage4_tokens = {'total_tokens_in': 0, 'total_tokens_out': 0, 'total_cost': 0, 'cache_read': 0, 'cache_write': 0}
         if self.enable_stage4:
-            stage4_logs = []
-            for policy_dir in self.output_dir.iterdir():
-                if policy_dir.is_dir() and not policy_dir.name.startswith('.') and policy_dir.name != 'goals':
-                    stage4_log = policy_dir / "stage4_fixtures.log"
-                    if stage4_log.exists():
-                        stage4_logs.append(stage4_log)
-            stage4_tokens = self._collect_stage_token_metrics("stage4", stage4_logs)
+            stage4_tokens = self._stage_tokens(4)
             print(f"Stage 4 tokens: {stage4_tokens['total_tokens_in']+stage4_tokens['total_tokens_out']:,} (In: {stage4_tokens['total_tokens_in']:,}, Out: {stage4_tokens['total_tokens_out']:,}, Cache Read: {stage4_tokens['cache_read']:,}, Cache Write: {stage4_tokens['cache_write']:,})")
         
         # Calculate totals
@@ -1616,7 +1681,7 @@ class PipelineExecutor:
         
         # Save execution time and token metrics to JSON file
         total_duration = stage0_duration + stage1_duration + stage2_duration + stage3_duration + stage4_duration
-        metrics_file = os.path.join(self.output_dir, 'execution_metrics.json')
+        metrics_file = str(self.log_dir / 'execution_metrics.json')
         metrics_data = {
             'start_time': datetime.fromtimestamp(start_time).isoformat(),
             'end_time': datetime.now().isoformat(),

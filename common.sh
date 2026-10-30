@@ -31,6 +31,25 @@ resolve_path() {
     fi
 }
 
+# Fail if a host path that will be mounted into the container overlaps
+# DATA_DIR/.logs (the private, host-only log root) in either direction.
+# Usage: assert_not_overlapping_private_logs <data_dir_resolved> <label> <path>
+assert_not_overlapping_private_logs() {
+    python3 - "$1" "$2" "$3" <<'PY' || exit 1
+import os, sys
+from pathlib import Path
+data, label, path = sys.argv[1:4]
+logs = os.path.realpath(os.path.join(data, ".logs"))
+p = os.path.realpath(path)
+# casefolded component-wise compare: catches case aliases on case-insensitive filesystems
+a, b = (tuple(c.casefold() for c in Path(x).parts) for x in (p, logs))
+if a[:len(b)] == b or b[:len(a)] == a:
+    print(f"ERROR: {label} ({p}) overlaps the private log directory ({logs}). "
+          f"Containers must never be able to write to DATA_DIR/.logs.", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 # Remember the current value of variables that an .env file must not override
 # (for example DATA_DIR exported by the caller).
 # Usage: preserve_env_vars VAR [VAR...]   (call before load_env_file)

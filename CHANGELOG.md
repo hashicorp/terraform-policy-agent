@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Security
+- Stage logs and `execution_metrics.json` are written to a private host-only `DATA_DIR/.logs/run-<random>/` directory instead of the container-writable `OUTPUT_DIR`, so a container can no longer plant symlinks that redirect host log writes. `OUTPUT_DIR` overlapping `DATA_DIR/.logs` (e.g. `.`) and unsafe pre-existing `.logs` are rejected. Per-stage token usage is stored in the checkpoint so `--resume` still reports it for skipped stages (checkpoints from older versions report 0 for those stages, with a warning). `result_check.py` exits 1 when no safe private log directory exists (e.g. legacy runs with logs only in `OUTPUT_DIR`); overlap checks are case-insensitive and component-wise, and `--log-dir` is not symlink-resolved.
+
+---
+
 ## [0.0.33] - 2026-10-26
 
 ### Added
