@@ -2,10 +2,12 @@
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,7 +18,13 @@ from test_private_logs import Base, FakePopen, ROOT, run_pipeline  # noqa: E402
 FAKE_ENGINE = """#!/bin/sh
 case "$1" in
   image|ps|stop) exit 0 ;;
-  run) echo "Error: mock"; exit "${FAKE_RC:-0}" ;;
+  run)
+    echo "Error: mock"
+    if [ -n "$FAKE_READY" ]; then
+      : > "$FAKE_READY"; i=0
+      while [ ! -e "$FAKE_GO" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+    fi
+    exit "${FAKE_RC:-0}" ;;
 esac
 """
 BAD_TEE = "#!/bin/sh\ncat >/dev/null\nexit 1\n"
@@ -116,6 +124,33 @@ class DirectStep(unittest.TestCase):
         self.assertIn("failed to write private log", r.stderr)
         r = self.sh("--no-confirm", "step3-summary", rc=3, path_prefix=f"{self.badbin}:")
         self.assertEqual(r.returncode, 3)
+
+
+    def test_signal_to_parent_while_engine_fails_is_not_success(self):
+        # /bin/bash (3.2 on macOS) runs the trap before PIPESTATUS is read; the signal must still win
+        for sig, code in ((signal.SIGTERM, 143), (signal.SIGINT, 130)):
+            with self.subTest(sig=sig.name):
+                ready, go = self.tmp / f"ready-{code}", self.tmp / f"go-{code}"
+                env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(self.tmp), "FAKE_RC": "3",
+                       "FAKE_READY": str(ready), "FAKE_GO": str(go)}
+                p = subprocess.Popen(["/bin/bash", str(self.scripts / "run_with_local_preparation.sh"),
+                                      "--no-confirm", "step3-summary"], stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True, cwd=self.cwd, env=env)
+                try:
+                    deadline = time.time() + 30
+                    while not ready.exists() and p.poll() is None and time.time() < deadline:
+                        time.sleep(0.05)
+                    self.assertTrue(ready.exists(), "script never reached the engine")
+                    os.kill(p.pid, sig)  # parent only, the engine keeps running
+                    go.touch()
+                    out, _ = p.communicate(timeout=30)
+                finally:
+                    if p.poll() is None:
+                        p.kill(); p.communicate()
+                self.assertEqual(p.returncode, code, out)
+                texts = [f.read_text() for f in (self.data / ".logs").glob("run-*/stage3.log")]
+                self.assertTrue(any(f"Return code: {code}" in t for t in texts), texts)
+                self.assertFalse(any("Return code: 0" in t for t in texts), texts)
 
 
 class OrchestratorMarker(Base):

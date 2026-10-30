@@ -749,13 +749,26 @@ fi
 
 # Execute the container run command
 if [ -n "$STEP_LOG" ]; then
-    # Read PIPESTATUS right away; errexit is off so a failing docker still reaches it.
+    # A signal trap would otherwise run before PIPESTATUS is read and overwrite it (bash 3.2),
+    # turning an interrupted run into success; record the signal and let it win instead.
+    _STEP_SIGNAL=0
+    trap '_STEP_SIGNAL=130; cleanup' INT
+    trap '_STEP_SIGNAL=143; cleanup' TERM
     set +e
     "${DOCKER_ARGS[@]}" 2>&1 | tee -a "${STEP_LOG}"
     _PIPE_STATUS=("${PIPESTATUS[@]}")
     set -e
-    exit_code=${_PIPE_STATUS[0]}
-    if [ "${_PIPE_STATUS[1]}" -ne 0 ] || ! echo "Return code: ${exit_code}" >> "${STEP_LOG}"; then
+    trap cleanup INT TERM
+    exit_code=${_PIPE_STATUS[0]:-1}
+    _TEE_STATUS=${_PIPE_STATUS[1]:-1}
+    if [ "${#_PIPE_STATUS[@]}" -ne 2 ]; then
+        exit_code=1
+        _TEE_STATUS=$(( _STEP_SIGNAL == 0 ))  # statuses lost: only a signal explains it
+    fi
+    [ "$_STEP_SIGNAL" -ne 0 ] && exit_code=$_STEP_SIGNAL
+    _LOG_FAILED=$_TEE_STATUS
+    echo "Return code: ${exit_code}" >> "${STEP_LOG}" || _LOG_FAILED=1
+    if [ "$_LOG_FAILED" -ne 0 ]; then
         echo "ERROR: failed to write private log ${STEP_LOG}" >&2
         [ "$exit_code" -eq 0 ] && exit_code=1
     fi
