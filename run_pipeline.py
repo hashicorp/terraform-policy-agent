@@ -132,8 +132,7 @@ class PipelineExecutor:
         # is handled by run.sh before calling this script.
         # This avoids duplication and keeps validation logic in one place.
         
-        # Security: logs live in a host-only dir that must never overlap the
-        # container-writable OUTPUT_DIR mount. Check before creating anything.
+        # Private log root must not overlap writable mounts; check before creating anything.
         self._check_log_root_not_overlapping_output()
 
         # Create input directory
@@ -198,16 +197,14 @@ class PipelineExecutor:
             self.cleanup_registered = True
     
     def _check_log_root_not_overlapping_output(self):
-        """Reject absolute OUTPUT_DIR, and OUTPUT_DIR / LOCAL_SKILLS_DIR mounts that contain,
-        equal, or lie inside DATA_DIR/.logs. DOCKER_RUN_EXTRA_ARGS mounts are not parsed:
-        the trusted operator must not expose DATA_DIR/.logs or its ancestors there."""
+        """Reject absolute OUTPUT_DIR and OUTPUT_DIR/LOCAL_SKILLS_DIR mounts overlapping DATA_DIR/.logs.
+        DOCKER_RUN_EXTRA_ARGS mounts are not parsed."""
         if os.path.isabs(os.getenv("OUTPUT_DIR", "output")):
             raise ValueError(
                 f"OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: {os.getenv('OUTPUT_DIR')}"
             )
         log_root = Path(os.path.realpath(self.data_dir / ".logs"))
         mounts = [("OUTPUT_DIR", self.output_dir)]
-        # LOCAL_SKILLS_DIR is another writable mount; resolved like the shell (relative to cwd).
         skills = os.getenv("LOCAL_SKILLS_DIR")
         if skills and os.path.isdir(skills):
             mounts.append(("LOCAL_SKILLS_DIR", Path(skills)))
@@ -221,21 +218,17 @@ class PipelineExecutor:
                 )
 
     def _create_private_log_dir(self) -> Path:
-        """Create a unique 0700 run dir under DATA_DIR/.logs, never mounted into containers.
-
-        Assumes DATA_DIR and its ancestors are controlled by the host operator.
-        Containers only see DATA_DIR/<OUTPUT_DIR>, so they cannot plant symlinks here.
-        """
+        """Create a unique 0700 run dir under the host-only DATA_DIR/.logs."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         root = self.data_dir / ".logs"
         try:
-            root.mkdir(mode=0o700, exist_ok=True)  # exist_ok: tolerate concurrent creation
-        except FileExistsError:  # regular file or dangling symlink at .logs
+            root.mkdir(mode=0o700, exist_ok=True)
+        except FileExistsError:
             raise ValueError(
                 f"Unsafe log root {root}: must be a real directory owned by the current "
                 "user and not group/other-writable. Remove or fix it and retry."
             ) from None
-        st = os.lstat(root)  # lstat: never follow a planted symlink; validated below
+        st = os.lstat(root)  # lstat: never follow symlinks
         if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
                 or st.st_mode & 0o022):
             raise ValueError(
@@ -245,12 +238,12 @@ class PipelineExecutor:
         return Path(tempfile.mkdtemp(prefix="run-", dir=root))
 
     def _log_path(self, stage: str, index: Optional[int] = None, retry: bool = False) -> Path:
-        """Flat host-generated log path: <stage>[_<index>][_retry].log (no untrusted names)."""
+        """Log path: <stage>[_<index>][_retry].log."""
         name = stage + (f"_{index:04d}" if index is not None else "") + ("_retry" if retry else "")
         return self.log_dir / f"{name}.log"
 
     def _stage_logs(self, stage: str) -> List[Path]:
-        """Initial-attempt logs for a stage (retry logs excluded, as before)."""
+        """Initial-attempt logs for a stage (retry logs excluded)."""
         logs = list(self.log_dir.glob(f"{stage}_*.log")) + list(self.log_dir.glob(f"{stage}.log"))
         return sorted(p for p in logs if not p.name.endswith("_retry.log"))
 
@@ -393,7 +386,6 @@ class PipelineExecutor:
             env = os.environ.copy()
             env['CONTAINER_NAME'] = container_name
             # Skip OUTPUT_DIR empty check when called from run_pipeline.py
-            # (OUTPUT_DIR may already hold generated artifacts; logs live in the private dir)
             env['SKIP_OUTPUT_DIR_CHECK'] = '1'
             env['SKIP_FAIL_OUTPUT_CLEANUP'] = '1'
             
@@ -1519,7 +1511,7 @@ class PipelineExecutor:
 
         checkpoint = self._load_checkpoint() if resume else {}
 
-        skipped_stages: Set[int] = set()  # stages whose tokens come from the checkpoint
+        skipped_stages: Set[int] = set()
         start_time = time.time()
 
         # Stage 0: Extraction

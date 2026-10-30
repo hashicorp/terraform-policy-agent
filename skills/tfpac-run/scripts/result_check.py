@@ -57,12 +57,8 @@ def is_safe_dir(path: Path) -> bool:
 
 
 def find_log_dir(data_dir: Path, explicit: Path = None):
-    """Return (private run dir or None, error or None). Never follows symlinks.
-
-    Without --log-dir this is the newest valid run under DATA_DIR/.logs. The newest run
-    may belong to a later single `--step` run rather than the full pipeline run you want;
-    pass --log-dir to select an exact run.
-    """
+    """Return (private run dir or None, error or None). Default: newest valid run with stage logs;
+    pass --log-dir to select an exact run."""
     if explicit is not None:
         if not is_safe_dir(explicit):
             return None, f"--log-dir is not a real directory owned by you with safe permissions: {explicit}"
@@ -164,7 +160,7 @@ def main() -> int:
     
     log_dir, log_error = find_log_dir(data_dir, Path(os.path.abspath(args.log_dir)) if args.log_dir else None)
     print(json.dumps(summarize_output(output_dir, log_dir, log_error), indent=2))
-    return 0 if log_dir else 1  # no logs is a failure, never a silent success
+    return 0 if log_dir else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

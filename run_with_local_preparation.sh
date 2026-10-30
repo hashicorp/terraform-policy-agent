@@ -518,13 +518,11 @@ fi
 # Resolve DATA_DIR path (handle both absolute and relative paths)
 DATA_DIR_RESOLVED=$(resolve_path "$DATA_DIR" "directory")
 
-# OUTPUT_DIR is a name relative to DATA_DIR; absolute values were never supported
-# (the mount source would not match the container path) and could alias DATA_DIR/.logs.
+# OUTPUT_DIR must be relative to DATA_DIR.
 if [[ "$OUTPUT_DIR" = /* ]]; then
     echo "ERROR: OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: ${OUTPUT_DIR}" >&2
     exit 1
 fi
-# The writable output mount must not expose the private log directory.
 assert_not_overlapping_private_logs "$DATA_DIR_RESOLVED" "OUTPUT_DIR mount" "${DATA_DIR_RESOLVED}/${OUTPUT_DIR}"
 
 # Create data directories on host

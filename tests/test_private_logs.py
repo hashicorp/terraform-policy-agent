@@ -72,7 +72,6 @@ class TestRouting(Base):
         pol = ex.output_dir / "PolA"; pol.mkdir()
         (pol / "requirement.txt").write_text("r"); (pol / "report.md").write_text("r")
         old = ex.goals_dir / "goal-001_stage1.log"
-        # Container swaps the legacy log path for a symlink *during* the run.
         FakePopen.on_start = lambda: old.symlink_to(self.sentinel)
         self.addCleanup(setattr, FakePopen, "on_start", None)
         seen = {}
@@ -155,7 +154,7 @@ class TestResumeMetrics(Base):
 
     def test_normal_run_counts_logs_and_stores_tokens_in_checkpoint(self):
         ex = self.make()
-        (ex.output_dir / "execution_metrics.json").symlink_to(self.sentinel)  # planted by a container
+        (ex.output_dir / "execution_metrics.json").symlink_to(self.sentinel)
         logs = {"stage0.log": tok(1, 2, 0.5, 3, 4), "stage1_0001.log": tok(10, 20, 1.0),
                 "stage2_0001.log": tok(100, 200, 2.0, 5, 6), "stage3.log": tok(7, 8, 0.25)}
         m, _ = self.run_pipeline(ex, False, logs)
@@ -177,7 +176,6 @@ class TestResumeMetrics(Base):
         for n, k in enumerate(stored):
             cp[f"stage{n}_tokens"] = stored[k]
         ex._checkpoint_dir().mkdir(parents=True); ex._checkpoint_path().write_text(json.dumps(cp))
-        # Any parse of a log for a skipped stage would give these poison values.
         poison = {k: tok(9999, 9999, 99.0, 9999, 9999) for k in stored}
         poison["stage3.log"] = tok(7, 8, 0.25, 2, 3)
         m, out = self.run_pipeline(ex, True, poison)
