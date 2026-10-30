@@ -64,15 +64,17 @@ def find_log_dir(data_dir: Path, explicit: Path = None):
     pass --log-dir to select an exact run.
     """
     if explicit is not None:
-        if is_safe_dir(explicit):
-            return explicit, None
-        return None, f"--log-dir is not a real directory owned by you with safe permissions: {explicit}"
+        if not is_safe_dir(explicit):
+            return None, f"--log-dir is not a real directory owned by you with safe permissions: {explicit}"
+        if not stage_logs(explicit, "stage*.log"):
+            return None, f"--log-dir contains no regular stage*.log files: {explicit}"
+        return explicit, None
     root = data_dir / ".logs"
     if not is_safe_dir(root):
         return None, f"no safe private log root at {root} (missing, symlink, wrong owner or unsafe permissions)"
-    runs = [p for p in root.glob("run-*") if is_safe_dir(p)]
+    runs = [p for p in root.glob("run-*") if is_safe_dir(p) and stage_logs(p, "stage*.log")]
     if not runs:
-        return None, f"no valid run-* directories under {root}"
+        return None, f"no valid run-* directories with stage logs under {root}"
     return max(runs, key=lambda p: os.lstat(p).st_mtime), None
 
 

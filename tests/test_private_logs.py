@@ -343,14 +343,38 @@ class TestResultCheck(unittest.TestCase):
         self.assertIsNotNone(self.rc.find_log_dir(self.data)[1])
 
     def test_unsafe_perms_and_explicit_log_dir(self):
-        d = self.run_dir("run-c"); d.chmod(0o777)
+        d = self.run_dir("run-c", stage0__log="ok"); d.chmod(0o777)
         self.assertIsNotNone(self.rc.find_log_dir(self.data)[1])
         self.assertIsNotNone(self.rc.find_log_dir(self.data, d)[1])
         d.chmod(0o700)
         self.assertEqual(self.rc.find_log_dir(self.data, d), (d, None))
 
+    def _cli(self, *args):
+        (self.tmp / ".env").write_text(f"DATA_DIR={self.data}\n")
+        return subprocess.run([sys.executable, str(ROOT / "skills/tfpac-run/scripts/result_check.py"), *args],
+                              capture_output=True, text=True, cwd=self.tmp)
+
+    def test_default_skips_newest_empty_run(self):
+        old = self.run_dir("run-old", stage0__log="ok")
+        os.utime(old, (1, 1))
+        self.run_dir("run-new")  # newest but empty
+        self.assertEqual(self.rc.find_log_dir(self.data), (old, None))
+        r = self._cli()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("run-old", r.stdout)
+
+    def test_only_empty_runs_fail_default_and_explicit(self):
+        d = self.run_dir("run-empty")
+        (d / "stage0.log").symlink_to(self.tmp)  # symlink is not a stage log
+        r = self._cli()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no valid run-*", r.stdout)
+        r = self._cli("--log-dir", str(d))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no regular stage*.log", r.stdout)
+
     def test_explicit_symlink_log_dir_rejected(self):
-        real = self.run_dir("run-real")
+        real = self.run_dir("run-real", stage0__log="ok")
         link = self.tmp / "link"; link.symlink_to(real)
         (self.tmp / ".env").write_text(f"DATA_DIR={self.data}\n")
         r = subprocess.run([sys.executable, str(ROOT / "skills/tfpac-run/scripts/result_check.py"),
