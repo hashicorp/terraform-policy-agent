@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Security
+- Stage logs and `execution_metrics.json` are written to a private host-only `DATA_DIR/.logs/run-<random>/` directory instead of the container-writable `OUTPUT_DIR`, so a container can no longer plant symlinks that redirect host log writes. `OUTPUT_DIR` overlapping `DATA_DIR/.logs` (e.g. `.`) and unsafe pre-existing `.logs` are rejected. Per-stage token usage is stored in the checkpoint so `--resume` still reports it for skipped stages (checkpoints from older versions report 0 for those stages, with a warning). `result_check.py` exits 1 when no safe private log directory exists (e.g. legacy runs with logs only in `OUTPUT_DIR`); overlap checks are case-insensitive and component-wise, and `--log-dir` is not symlink-resolved.
+- Backups, checkpoint snapshots and restores refuse symlinks and special files in the output tree and no longer follow links; snapshots are written atomically with a version marker (older unversioned snapshots are rejected on resume), `.checkpoint`/`.backup` are covered by the mount overlap checks, and a container that cannot be confirmed removed after a timeout or failed exit blocks copying and checkpointing.
+- Direct `--step` runs through `run_with_local_preparation.sh` now write a fresh private log run directory (path printed) and `result_check.py --log-dir` only accepts a real `run-*` directory directly under the configured `DATA_DIR/.logs`, validating the root first.
+
+---
+
 ## [0.0.33] - 2026-10-26
 
 ### Added

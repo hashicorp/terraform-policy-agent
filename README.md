@@ -548,9 +548,11 @@ Output files are generated in the directory specified by `OUTPUT_DIR` in your `.
 
 ```sh
 $ ls ./data/output
-CloudFront_Associated_WAF   goals                   summary.json
-stage0_extraction.log       stage3_summary.log      summary.md
+CloudFront_Associated_WAF   goals      summary.json
+summary.md
 ```
+
+Stage logs and `execution_metrics.json` are written to a private host-only directory, `data/.logs/run-<random>/`, which is not mounted into the container by any supported configuration. `OUTPUT_DIR` must be relative to `DATA_DIR` (absolute values are rejected) and, like `LOCAL_SKILLS_DIR`, must not be `.` or otherwise contain or sit inside `DATA_DIR/.logs`, `.checkpoint` or `.backup`; the run fails before any container starts if it does. Extra mounts you add through `DOCKER_RUN_EXTRA_ARGS` are not inspected: as a trusted operator you must not expose `DATA_DIR/.logs` or its parent directories there. A pre-existing `.logs` that is a symlink, not a directory, not owned by you, or group/other-writable is rejected. Backups (`.backup`), checkpoint snapshots (`.checkpoint`) and restores refuse any symlink or special file in the output tree and never dereference links. This assumes nothing is writing to `OUTPUT_DIR` during the copy, so after a stage timeout or failed container exit the pipeline force-removes the container and, if removal cannot be confirmed, refuses to copy or checkpoint. Not defended: a container started outside the pipeline (e.g. `run-custom.sh`) writing during a copy.
 
 **Important:** The `OUTPUT_DIR` must be empty before running the full pipeline to prevent accidental overwrites. If you need to run multiple conversions, set a different `OUTPUT_DIR` in `.env` for each run (e.g., `OUTPUT_DIR=output-v2`, `OUTPUT_DIR=results-20260603`).
 
@@ -688,7 +690,7 @@ Terraform Policy Agent runs an AI coding agent inside a container. Be aware of w
 
 ### Resume from Checkpoint
 
-Interrupted runs save progress to `.checkpoint` in `DATA_DIR`. Use `--resume` to pick up from the last completed stage without re-running earlier steps:
+Interrupted runs save progress to `.checkpoint` in `DATA_DIR`. Use `--resume` to pick up from the last completed stage without re-running earlier steps. Snapshots are versioned: a `.checkpoint` written by an older version may contain copied host files (symlinks were followed) and is rejected on resume, as is a missing snapshot. Delete the old `.checkpoint`, and review or delete old `.backup` directories, before starting a fresh run:
 
 ```bash
 ./run.sh --resume local      # local mode
@@ -722,4 +724,4 @@ Both flags can be combined:
 ### Pipeline Fails
 - Check `data/input/policy_goal.txt` exists and is properly formatted
 - Verify binary paths in `.env` are correct
-- Check logs in `data/output/stage*.log`
+- Check logs in `data/.logs/run-*/stage*.log` (private, host-only; the newest `run-*` directory is the latest run)

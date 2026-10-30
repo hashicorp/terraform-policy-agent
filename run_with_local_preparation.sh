@@ -50,7 +50,7 @@ PACKAGE_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # Preserve environment variables that should not be overridden by .env
-ENV_OVERRIDABLE_VARS=(CONTAINER_NAME DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE LOCAL_SKILLS_DIR)
+ENV_OVERRIDABLE_VARS=(CONTAINER_NAME DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE LOCAL_SKILLS_DIR PIPELINE_LOG_CAPTURED)
 preserve_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # Load environment variables from .env file if it exists
@@ -518,6 +518,13 @@ fi
 # Resolve DATA_DIR path (handle both absolute and relative paths)
 DATA_DIR_RESOLVED=$(resolve_path "$DATA_DIR" "directory")
 
+# OUTPUT_DIR must be relative to DATA_DIR.
+if [[ "$OUTPUT_DIR" = /* ]]; then
+    echo "ERROR: OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: ${OUTPUT_DIR}" >&2
+    exit 1
+fi
+assert_not_overlapping_private_logs "$DATA_DIR_RESOLVED" "OUTPUT_DIR mount" "${DATA_DIR_RESOLVED}/${OUTPUT_DIR}"
+
 # Create data directories on host
 mkdir -p "${DATA_DIR_RESOLVED}/${INPUT_DIR}"
 
@@ -542,8 +549,7 @@ if [ "$SKILL" = "step0-extraction" ] && [ "${SKIP_OUTPUT_DIR_CHECK:-}" != "1" ] 
                 1)
                     _TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
                     _BACKUP_DIR="${DATA_DIR_RESOLVED}/.backup/output_${_TIMESTAMP}"
-                    mkdir -p "${DATA_DIR_RESOLVED}/.backup"
-                    cp -r "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}"
+                    backup_output_dir "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}" || exit 1
                     echo "✅ Backed up to: ${_BACKUP_DIR}"
                     break
                     ;;
@@ -638,6 +644,7 @@ DOCKER_ARGS+=(
 if [ -n "${LOCAL_SKILLS_DIR:-}" ]; then
     LOCAL_SKILLS_DIR_RESOLVED=$(resolve_path "$LOCAL_SKILLS_DIR" "directory")
     if [ -d "$LOCAL_SKILLS_DIR_RESOLVED" ]; then
+        assert_not_overlapping_private_logs "$DATA_DIR_RESOLVED" "LOCAL_SKILLS_DIR mount" "$LOCAL_SKILLS_DIR_RESOLVED"
         [ "$DRYRUN" = true ] || echo "Mounting local skills directory: ${LOCAL_SKILLS_DIR_RESOLVED}"
         # Mount to both locations:
         # - /workspace/.opencode/skills: Used by OpenCode
@@ -707,8 +714,65 @@ if [ "$DRYRUN" = true ]; then
     exit 0
 fi
 
+# Direct --step runs have no orchestrator to write a private log, so capture one here.
+# Skipped when run_pipeline.py already logs this stage (PIPELINE_LOG_CAPTURED=1).
+STEP_LOG=""
+if [ "${PIPELINE_LOG_CAPTURED:-}" != "1" ]; then
+    case "$SKILL" in
+        step0-extraction)          _STEP_LOG_NAME="stage0" ;;
+        step1-requirement)         _STEP_LOG_NAME="stage1_0001" ;;
+        step2-generation)          _STEP_LOG_NAME="stage2_0001" ;;
+        step3-summary)             _STEP_LOG_NAME="stage3" ;;
+        step4-validation-fixtures) _STEP_LOG_NAME="stage4_0001" ;;
+    esac
+    if ! STEP_LOG_DIR=$(python3 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from run_pipeline import create_private_run_dir
+try:
+    print(create_private_run_dir(Path(sys.argv[2])))
+except (ValueError, OSError) as e:
+    sys.exit(f"ERROR: {e}")
+' "${SCRIPT_DIR}" "${DATA_DIR_RESOLVED}"); then
+        exit 1
+    fi
+    STEP_LOG="${STEP_LOG_DIR}/${_STEP_LOG_NAME}.log"
+    {
+        echo "${SKILL} (direct step run)"
+        echo "Started at: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "Container: ${CONTAINER_NAME}"
+        echo ""
+    } > "${STEP_LOG}" || { echo "ERROR: cannot write private log ${STEP_LOG}" >&2; exit 1; }
+    echo "Private log dir: ${STEP_LOG_DIR}"
+fi
+
 # Execute the container run command
-if "${DOCKER_ARGS[@]}"; then
+if [ -n "$STEP_LOG" ]; then
+    # A signal trap would otherwise run before PIPESTATUS is read and overwrite it (bash 3.2),
+    # turning an interrupted run into success; record the signal and let it win instead.
+    _STEP_SIGNAL=0
+    trap '_STEP_SIGNAL=130; cleanup' INT
+    trap '_STEP_SIGNAL=143; cleanup' TERM
+    set +e
+    "${DOCKER_ARGS[@]}" 2>&1 | tee -a "${STEP_LOG}"
+    _PIPE_STATUS=("${PIPESTATUS[@]}")
+    set -e
+    trap cleanup INT TERM
+    exit_code=${_PIPE_STATUS[0]:-1}
+    _TEE_STATUS=${_PIPE_STATUS[1]:-1}
+    if [ "${#_PIPE_STATUS[@]}" -ne 2 ]; then
+        exit_code=1
+        _TEE_STATUS=$(( _STEP_SIGNAL == 0 ))  # statuses lost: only a signal explains it
+    fi
+    [ "$_STEP_SIGNAL" -ne 0 ] && exit_code=$_STEP_SIGNAL
+    _LOG_FAILED=$_TEE_STATUS
+    echo "Return code: ${exit_code}" >> "${STEP_LOG}" || _LOG_FAILED=1
+    if [ "$_LOG_FAILED" -ne 0 ]; then
+        echo "ERROR: failed to write private log ${STEP_LOG}" >&2
+        [ "$exit_code" -eq 0 ] && exit_code=1
+    fi
+elif "${DOCKER_ARGS[@]}"; then
     exit_code=0
 else
     exit_code=$?
