@@ -277,17 +277,23 @@ class TestRejections(Base):
             self.make()
         self.assertEqual(list(target.iterdir()), [])
 
+    def _assert_unsafe_root(self, setup):
+        """Fresh DATA_DIR per case so only the .logs diagnostic can be raised."""
+        data = Path(tempfile.mkdtemp()).resolve() / "data"
+        data.mkdir()
+        setup(data / ".logs")
+        with mock.patch.dict(os.environ, {"DATA_DIR": str(data)}):
+            with self.assertRaisesRegex(ValueError, "Unsafe log root"):
+                self.make()
+
     def test_logs_unsafe_permissions_and_non_dir_rejected(self):
-        (self.data).mkdir()
-        logs = self.data / ".logs"; logs.mkdir(); logs.chmod(0o777)
-        with self.assertRaises(ValueError):
-            self.make()
-        logs.chmod(0o770)
-        with self.assertRaises(ValueError):
-            self.make()
-        logs.rmdir(); logs.write_text("file")
-        with self.assertRaises(ValueError):
-            self.make()
+        self._assert_unsafe_root(lambda l: (l.mkdir(), l.chmod(0o777)))
+        self._assert_unsafe_root(lambda l: (l.mkdir(), l.chmod(0o770)))
+        self._assert_unsafe_root(lambda l: l.write_text("file"))
+
+    def test_dangling_logs_symlink_fails_closed(self):
+        self._assert_unsafe_root(lambda l: l.symlink_to(self.tmp / "missing"))
+        self.assertFalse((self.tmp / "missing").exists())
 
 
 class TestResultCheck(unittest.TestCase):

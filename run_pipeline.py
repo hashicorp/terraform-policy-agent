@@ -228,7 +228,13 @@ class PipelineExecutor:
         """
         self.data_dir.mkdir(parents=True, exist_ok=True)
         root = self.data_dir / ".logs"
-        root.mkdir(mode=0o700, exist_ok=True)  # exist_ok: tolerate concurrent creation
+        try:
+            root.mkdir(mode=0o700, exist_ok=True)  # exist_ok: tolerate concurrent creation
+        except FileExistsError:  # regular file or dangling symlink at .logs
+            raise ValueError(
+                f"Unsafe log root {root}: must be a real directory owned by the current "
+                "user and not group/other-writable. Remove or fix it and retry."
+            ) from None
         st = os.lstat(root)  # lstat: never follow a planted symlink; validated below
         if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
                 or st.st_mode & 0o022):
