@@ -399,8 +399,38 @@ class TestResultCheck(unittest.TestCase):
         r = subprocess.run([sys.executable, str(ROOT / "skills/tfpac-run/scripts/result_check.py"),
                             "--log-dir", str(link)], capture_output=True, text=True, cwd=self.tmp)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("--log-dir is not a real directory", r.stdout)
+        self.assertIn("--log-dir must be a run-* directory directly under", r.stdout)
         self.assertIsNotNone(self.rc.find_log_dir(self.data, Path(os.path.abspath(link)))[1])
+        alias = self.logs / "run-alias"; alias.symlink_to(real)  # run-* name but a symlink
+        self.assertIn("not a real directory", self.rc.find_log_dir(self.data, alias)[1])
+
+    def test_explicit_must_be_real_run_under_configured_root(self):
+        good = self.run_dir("run-good", stage0__log="ok")
+        self.assertEqual(self.rc.find_log_dir(self.data, good), (good, None))
+        outside = self.tmp / "outside"; outside.mkdir(mode=0o700)
+        copied = outside / "run-copy"; copied.mkdir(mode=0o700); (copied / "stage0.log").write_text("ok")
+        alias = self.tmp / "alias"; alias.symlink_to(self.logs)
+        nested = self.run_dir("run-n"); (nested / "run-inner").mkdir(mode=0o700)
+        (nested / "run-inner" / "stage0.log").write_text("ok")
+        bad_name = self.logs / "other"; bad_name.mkdir(mode=0o700); (bad_name / "stage0.log").write_text("ok")
+        for bad in (copied, alias / "run-good", nested / "run-inner", bad_name):
+            self.assertIn("directly under", self.rc.find_log_dir(self.data, bad)[1], str(bad))
+        r = self._cli("--log-dir", str(copied))
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("run-copy/stage0", r.stdout)
+
+    def test_symlinked_logs_root_to_forged_run_fails_default_and_explicit(self):
+        import shutil
+        shutil.rmtree(self.logs)
+        forged = self.out / "forged"; forged.mkdir(mode=0o700)
+        run = forged / "run-x"; run.mkdir(mode=0o700); (run / "stage0.log").write_text("ok")
+        self.logs.symlink_to(forged)
+        self.assertIn("no safe private log root", self.rc.find_log_dir(self.data)[1])
+        self.assertIn("no safe private log root", self.rc.find_log_dir(self.data, self.logs / "run-x")[1])
+        for args in ((), ("--log-dir", str(self.logs / "run-x"))):
+            r = self._cli(*args)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("no safe private log root", r.stdout)
 
 
 if __name__ == "__main__":

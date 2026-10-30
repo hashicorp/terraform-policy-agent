@@ -28,7 +28,7 @@ Inspect the following when they exist:
 - `DATA_DIR/.logs/run-*/stage4_<n>[_retry].log` (if Stage 4 is enabled)
 - `DATA_DIR/.logs/run-*/execution_metrics.json`
 
-Logs are private and host-only (not in `OUTPUT_DIR`). `result_check.py` uses the newest valid run by default, which may be a later single `--step` run; use `--log-dir DATA_DIR/.logs/run-XXXX` to select an exact run. It fails (exit 1) if no safe log directory exists.
+Logs are private and host-only (not in `OUTPUT_DIR`). `result_check.py` uses the newest valid run by default, which may be a later single `--step` run; a direct `--step` run (not started by the pipeline) writes its own fresh run directory and prints `Private log dir: <path>`. Use `--log-dir <that path>` to select that exact run; it must be a real `run-*` directory directly under the selected `DATA_DIR/.logs` (copies elsewhere and symlinked roots or aliases are rejected). It fails (exit 1) if no safe log directory exists.
 - `DATA_DIR/OUTPUT_DIR/summary.md`
 - `DATA_DIR/OUTPUT_DIR/summary.json`
 - relevant generated `report.md`, `requirement.txt`, `.hcl`, `.tf`, and `gwt.json` files

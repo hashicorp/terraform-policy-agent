@@ -58,16 +58,19 @@ def is_safe_dir(path: Path) -> bool:
 
 def find_log_dir(data_dir: Path, explicit: Path = None):
     """Return (private run dir or None, error or None). Default: newest valid run with stage logs;
-    pass --log-dir to select an exact run."""
+    --log-dir selects an exact run-* directory directly under this DATA_DIR/.logs."""
+    root = data_dir / ".logs"
+    if not is_safe_dir(root):
+        return None, f"no safe private log root at {root} (missing, symlink, wrong owner or unsafe permissions)"
     if explicit is not None:
+        if (not explicit.name.startswith("run-") or not is_safe_dir(explicit.parent)
+                or os.path.realpath(explicit.parent) != os.path.realpath(root)):
+            return None, f"--log-dir must be a run-* directory directly under {root}: {explicit}"
         if not is_safe_dir(explicit):
             return None, f"--log-dir is not a real directory owned by you with safe permissions: {explicit}"
         if not stage_logs(explicit, "stage*.log"):
             return None, f"--log-dir contains no regular stage*.log files: {explicit}"
         return explicit, None
-    root = data_dir / ".logs"
-    if not is_safe_dir(root):
-        return None, f"no safe private log root at {root} (missing, symlink, wrong owner or unsafe permissions)"
     runs = [p for p in root.glob("run-*") if is_safe_dir(p) and stage_logs(p, "stage*.log")]
     if not runs:
         return None, f"no valid run-* directories with stage logs under {root}"
@@ -143,7 +146,7 @@ def main() -> int:
     parser.add_argument(
         "--log-dir",
         default=None,
-        help="Exact private run directory (DATA_DIR/.logs/run-*). Default: newest valid run, "
+        help="Exact private run directory directly under the selected DATA_DIR/.logs. Default: newest valid run, "
              "which may be a later --step run."
     )
     args = parser.parse_args()

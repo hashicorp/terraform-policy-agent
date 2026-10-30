@@ -50,7 +50,7 @@ PACKAGE_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # Preserve environment variables that should not be overridden by .env
-ENV_OVERRIDABLE_VARS=(CONTAINER_NAME DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE LOCAL_SKILLS_DIR)
+ENV_OVERRIDABLE_VARS=(CONTAINER_NAME DATA_DIR INPUT_DIR OUTPUT_DIR INPUT_FILE LOCAL_SKILLS_DIR PIPELINE_LOG_CAPTURED)
 preserve_env_vars "${ENV_OVERRIDABLE_VARS[@]}"
 
 # Load environment variables from .env file if it exists
@@ -714,8 +714,52 @@ if [ "$DRYRUN" = true ]; then
     exit 0
 fi
 
+# Direct --step runs have no orchestrator to write a private log, so capture one here.
+# Skipped when run_pipeline.py already logs this stage (PIPELINE_LOG_CAPTURED=1).
+STEP_LOG=""
+if [ "${PIPELINE_LOG_CAPTURED:-}" != "1" ]; then
+    case "$SKILL" in
+        step0-extraction)          _STEP_LOG_NAME="stage0" ;;
+        step1-requirement)         _STEP_LOG_NAME="stage1_0001" ;;
+        step2-generation)          _STEP_LOG_NAME="stage2_0001" ;;
+        step3-summary)             _STEP_LOG_NAME="stage3" ;;
+        step4-validation-fixtures) _STEP_LOG_NAME="stage4_0001" ;;
+    esac
+    if ! STEP_LOG_DIR=$(python3 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from run_pipeline import create_private_run_dir
+try:
+    print(create_private_run_dir(Path(sys.argv[2])))
+except (ValueError, OSError) as e:
+    sys.exit(f"ERROR: {e}")
+' "${SCRIPT_DIR}" "${DATA_DIR_RESOLVED}"); then
+        exit 1
+    fi
+    STEP_LOG="${STEP_LOG_DIR}/${_STEP_LOG_NAME}.log"
+    {
+        echo "${SKILL} (direct step run)"
+        echo "Started at: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "Container: ${CONTAINER_NAME}"
+        echo ""
+    } > "${STEP_LOG}" || { echo "ERROR: cannot write private log ${STEP_LOG}" >&2; exit 1; }
+    echo "Private log dir: ${STEP_LOG_DIR}"
+fi
+
 # Execute the container run command
-if "${DOCKER_ARGS[@]}"; then
+if [ -n "$STEP_LOG" ]; then
+    # Read PIPESTATUS right away; errexit is off so a failing docker still reaches it.
+    set +e
+    "${DOCKER_ARGS[@]}" 2>&1 | tee -a "${STEP_LOG}"
+    _PIPE_STATUS=("${PIPESTATUS[@]}")
+    set -e
+    exit_code=${_PIPE_STATUS[0]}
+    if [ "${_PIPE_STATUS[1]}" -ne 0 ] || ! echo "Return code: ${exit_code}" >> "${STEP_LOG}"; then
+        echo "ERROR: failed to write private log ${STEP_LOG}" >&2
+        [ "$exit_code" -eq 0 ] && exit_code=1
+    fi
+elif "${DOCKER_ARGS[@]}"; then
     exit_code=0
 else
     exit_code=$?

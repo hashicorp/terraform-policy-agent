@@ -55,6 +55,27 @@ def paths_overlap(a: str, b: str) -> bool:
     return pa[:n] == pb[:n]
 
 
+def create_private_run_dir(data_dir: Path) -> Path:
+    """Create a unique 0700 run dir under the host-only DATA_DIR/.logs."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    root = data_dir / ".logs"
+    try:
+        root.mkdir(mode=0o700, exist_ok=True)
+    except FileExistsError:
+        raise ValueError(
+            f"Unsafe log root {root}: must be a real directory owned by the current "
+            "user and not group/other-writable. Remove or fix it and retry."
+        ) from None
+    st = os.lstat(root)  # lstat: never follow symlinks
+    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
+            or st.st_mode & 0o022):
+        raise ValueError(
+            f"Unsafe log root {root}: must be a real directory owned by the current "
+            "user and not group/other-writable. Remove or fix it and retry."
+        )
+    return Path(tempfile.mkdtemp(prefix="run-", dir=root))
+
+
 SNAPSHOT_VERSION = 2
 
 
@@ -259,23 +280,7 @@ class PipelineExecutor:
 
     def _create_private_log_dir(self) -> Path:
         """Create a unique 0700 run dir under the host-only DATA_DIR/.logs."""
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        root = self.data_dir / ".logs"
-        try:
-            root.mkdir(mode=0o700, exist_ok=True)
-        except FileExistsError:
-            raise ValueError(
-                f"Unsafe log root {root}: must be a real directory owned by the current "
-                "user and not group/other-writable. Remove or fix it and retry."
-            ) from None
-        st = os.lstat(root)  # lstat: never follow symlinks
-        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
-                or st.st_mode & 0o022):
-            raise ValueError(
-                f"Unsafe log root {root}: must be a real directory owned by the current "
-                "user and not group/other-writable. Remove or fix it and retry."
-            )
-        return Path(tempfile.mkdtemp(prefix="run-", dir=root))
+        return create_private_run_dir(self.data_dir)
 
     def _log_path(self, stage: str, index: Optional[int] = None, retry: bool = False) -> Path:
         """Log path: <stage>[_<index>][_retry].log."""
@@ -476,6 +481,8 @@ class PipelineExecutor:
             # Skip OUTPUT_DIR empty check when called from run_pipeline.py
             env['SKIP_OUTPUT_DIR_CHECK'] = '1'
             env['SKIP_FAIL_OUTPUT_CLEANUP'] = '1'
+            # The orchestrator already writes this stage's private log; stop run.sh from adding a second one
+            env['PIPELINE_LOG_CAPTURED'] = '1'
             
             # Track this container
             self.running_containers.add(container_name)
