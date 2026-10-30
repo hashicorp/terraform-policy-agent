@@ -178,21 +178,29 @@ class TestResumeMetrics(Base):
         ex._checkpoint_dir().mkdir(parents=True); ex._checkpoint_path().write_text(json.dumps(cp))
         poison = {k: tok(9999, 9999, 99.0, 9999, 9999) for k in stored}
         poison["stage3.log"] = tok(7, 8, 0.25, 2, 3)
-        m, out = self.run_pipeline(ex, True, poison)
+        with self.assertNoLogs("run_pipeline", level="WARNING"):
+            m, out = self.run_pipeline(ex, True, poison)
         self.assertEqual((m['stage0_tokens_in'], m['stage1_tokens_out'], m['stage2_cache_write']), (1, 20, 6))
         self.assertEqual((m['stage3_tokens_in'], m['stage3_cache_read']), (7, 2))
         self.assertEqual(m['total_tokens_in'], 118)
         self.assertEqual(m['total_cost'], 3.75)
         self.assertEqual(m['total_cache_read'], 3 + 1 + 5 + 2)
-        self.assertNotIn("no token usage stored", out)
 
     def test_legacy_checkpoint_without_tokens_warns_and_reports_zero(self):
         ex = self.make()
         ex._checkpoint_dir().mkdir(parents=True)
         ex._checkpoint_path().write_text(json.dumps({f"stage{n}_done": True for n in range(4)}))
-        m, out = self.run_pipeline(ex, True, {})
+        with self.assertLogs("run_pipeline", level="WARNING") as cm:
+            m, out = self.run_pipeline(ex, True, {})
         self.assertEqual(m['total_tokens'], 0)
-        self.assertEqual(out.count("no token usage stored in checkpoint"), 4)
+        self.assertEqual(len(cm.records), 4)
+        for rec in cm.records:
+            msg = rec.getMessage()
+            self.assertEqual(rec.levelname, "WARNING")
+            self.assertIn("no token usage stored in checkpoint", msg)
+            self.assertIn("understated", msg)
+            self.assertTrue(msg.isascii())
+        self.assertNotIn("no token usage stored", out)
 
     def test_malformed_stored_tokens_treated_as_missing(self):
         ex = self.make()

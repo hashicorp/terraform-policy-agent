@@ -35,12 +35,15 @@ import signal
 import atexit
 import re
 import json
+import logging
 import stat
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def paths_overlap(a: str, b: str) -> bool:
@@ -260,8 +263,9 @@ class PipelineExecutor:
                 isinstance(t.get(k), (int, float)) and not isinstance(t.get(k), bool)
                 for k in self._TOKEN_KEYS)):
             return {k: t[k] for k in self._TOKEN_KEYS}
-        print(f"  ⚠️  Stage {stage}: no token usage stored in checkpoint (created by an older version); "
-              f"earlier logs are unavailable, so Stage {stage} tokens are reported as 0 (totals are understated).")
+        logger.warning("Stage %d: no token usage stored in checkpoint (created by an older version); "
+                       "earlier logs are unavailable, so Stage %d tokens are reported as 0 (totals are understated).",
+                       stage, stage)
         return {k: 0 for k in self._TOKEN_KEYS}
 
     def _signal_handler(self, signum, frame):
