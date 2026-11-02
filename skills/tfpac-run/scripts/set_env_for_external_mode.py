@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright IBM Corp. 2026
+
 """
 set_env_for_external_mode.py
 

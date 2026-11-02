@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright IBM Corp. 2026
+
 # Wrapper script for pre_check.py
 # Automatically detects available Python interpreter (python3 or python)
 
