@@ -78,18 +78,28 @@ def find_log_dir(data_dir: Path, explicit: Path = None):
         if not stage_logs(explicit, "stage*.log"):
             return None, f"--log-dir contains no regular stage*.log files: {explicit}"
         return explicit, None
-    runs = [p for p in root.glob("run-*") if is_safe_dir(p) and stage_logs(p, "stage*.log")]
+    runs = []  # (mtime, path); a run removed or made unreadable meanwhile is skipped
+    for p in root.glob("run-*"):
+        if is_safe_dir(p) and stage_logs(p, "stage*.log"):
+            try:
+                runs.append((os.lstat(p).st_mtime, p))
+            except OSError:
+                continue
     if not runs:
         return None, f"no valid run-* directories with stage logs under {root}"
-    return max(runs, key=lambda p: os.lstat(p).st_mtime), None
+    return max(runs, key=lambda r: r[0])[1], None
 
 
 def stage_logs(log_dir: Path, pattern: str) -> list:
     """Regular, non-symlink log files only."""
-    return sorted(
-        str(p) for p in log_dir.glob(pattern)
-        if stat.S_ISREG(os.lstat(p).st_mode)
-    )
+    found = []
+    for p in log_dir.glob(pattern):
+        try:  # an entry deleted or made unreadable since the glob is simply not a usable log
+            if stat.S_ISREG(os.lstat(p).st_mode):
+                found.append(str(p))
+        except OSError:
+            continue
+    return sorted(found)
 
 
 def summarize_output(output_dir: Path, log_dir: Path = None, log_error: str = None) -> dict:
