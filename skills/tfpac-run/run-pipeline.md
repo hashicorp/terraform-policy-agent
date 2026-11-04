@@ -187,7 +187,7 @@ Provide ONLY these clickable suggestions: 30, 60 (default), 90, custom input.
 
 Then repeat the following cycle:
 1. Sleep for the specified interval (use `sleep <seconds>` command - do not count manually)
-2. Read the last few lines of log files in `DATA_DIR/OUTPUT_DIR` (or `<LOG_DIR>` if `SINGLE_POLICY_MODE=true`) to understand what's happening. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
+2. Read the last few lines of the private stage logs `DATA_DIR/.logs/run-*/stage*.log` (newest run directory; see Logs below) to understand what's happening; for the `nohup` wrapper output also read `<LOG_DIR>`. Do not look for stage logs in `DATA_DIR/OUTPUT_DIR`. Some stages may have multiple log files (e.g., Stage 1 has multiple goal files). Read the last few lines from each relevant log file. If there's only one log file, read that one.
 3. Summarize the current activity based on what you read from the logs. Report only facts from the log content, avoid speculation or assumptions.
 4. Always include the total line count: `Log line count total: <sum of all log file line counts>`
    - **Note:** This metric is essential to quantitatively show the user how much progress has been made and confirm that execution is actually progressing.
@@ -212,12 +212,16 @@ Typical outputs include:
 
 ## Logs
 
-Prefer stage logs under `DATA_DIR/OUTPUT_DIR`:
+Prefer the private stage logs:
 
-- `DATA_DIR/OUTPUT_DIR/stage0_extraction.log`
-- `DATA_DIR/OUTPUT_DIR/goals/goal-*_stage1.log`
-- `DATA_DIR/OUTPUT_DIR/<PolicyName>/stage2_generation.log`
-- `DATA_DIR/OUTPUT_DIR/stage3_summary.log`
+- `DATA_DIR/.logs/run-*/stage0.log`
+- `DATA_DIR/.logs/run-*/stage1_<n>[_retry].log`
+- `DATA_DIR/.logs/run-*/stage2_<n>[_retry].log`
+- `DATA_DIR/.logs/run-*/stage3[_retry].log`
+- `DATA_DIR/.logs/run-*/stage4_<n>[_retry].log` (if Stage 4 is enabled)
+- `DATA_DIR/.logs/run-*/execution_metrics.json`
+
+Logs are private and host-only (not in `OUTPUT_DIR`). `result_check.py` uses the newest valid run by default, which may be a later single `--step` run; a direct `--step` run (not started by the pipeline) writes its own fresh run directory and prints `Private log dir: <path>`. Use `--log-dir <that path>` to select that exact run; it must be a real `run-*` directory directly under the selected `DATA_DIR/.logs` (copies elsewhere and symlinked roots or aliases are rejected). It fails (exit 1) if no safe log directory exists.
 
 `run.log` is optional and useful, but stage logs are the primary source of truth.
 

@@ -548,9 +548,18 @@ Output files are generated in the directory specified by `OUTPUT_DIR` in your `.
 
 ```sh
 $ ls ./data/output
-CloudFront_Associated_WAF   goals                   summary.json
-stage0_extraction.log       stage3_summary.log      summary.md
+CloudFront_Associated_WAF   goals      summary.json
+summary.md
 ```
+
+Stage logs and `execution_metrics.json` are written to a private host-only directory, `data/.logs/run-<random>/`, which is not mounted into the container by any supported configuration. A pre-existing `.logs` that is a symlink, not a directory, not owned by you, or group/other-writable is rejected.
+
+- **Paths:** `OUTPUT_DIR` is relative to `DATA_DIR`: absolute values and `..` are rejected, and `.`, empty and trailing-slash forms are normalized. `OUTPUT_DIR` and a `LOCAL_SKILLS_DIR` that is actually mounted must not contain or sit inside `DATA_DIR/.logs`, `.checkpoint` or `.backup`; the run fails before any container starts if they do. `LOCAL_SKILLS_DIR` must also not contain or sit inside the output directory (case-insensitive, including missing paths and dangling links); this is checked before any directory is created. A path such as `LOCAL_SKILLS_DIR=.` is rejected only when it actually overlaps these locations. In direct `--step` runs a missing relative `DATA_DIR` is an error (it never falls back to the current directory); an absolute `DATA_DIR` and the full pipeline can create it. `DATA_DIR` itself and its ancestors are trusted and may contain spaces, `..` or symlinks.
+- **Extra mounts:** mounts you add through `DOCKER_RUN_EXTRA_ARGS` are not inspected: as a trusted operator you must not expose `DATA_DIR/.logs` or its parent directories there.
+- **Copies:** the Python pipeline's backups (`.backup`), checkpoint snapshots (`.checkpoint`) and restores refuse symlinks and special files in the output tree and never dereference links. The direct-step shell backup (interactive menu choice 1) refuses symlinks only; it then copies with `cp -R -P`, which recreates special files such as FIFOs without reading their data. That is pre-existing behavior and has not been changed. Copies assume nothing else is writing to `OUTPUT_DIR`; a container started outside the pipeline (e.g. `run-custom.sh`) writing during a copy is not defended.
+- **Process groups and interrupts:** each container wrapper runs in its own session/process group. On timeout, failure, or a handled `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT`, the pipeline sends the group `SIGTERM`, then `SIGKILL`, before cleaning up the container engine. A group that survives fails the stage, and if cleanup cannot be confirmed the pipeline refuses to copy, checkpoint or start new stages.
+- **Checkpoints:** the new snapshot and its metadata (`.checkpoint/pipeline_checkpoint.json`) are prepared first, then swapped in. A filesystem commit marker (the prepared metadata file being consumed) decides whether the old or the new snapshot/metadata pair is kept after a single handled interrupt. If rollback itself fails, the previous snapshot is kept in `DATA_DIR/.checkpoint/.stage<N>-*/` for manual recovery.
+- **Not covered:** `SIGKILL`, power loss and fsync durability, closely repeated interrupts during rollback, other host processes writing concurrently, and anything verified against a real container engine or model (the tests use a fake engine).
 
 **Important:** The `OUTPUT_DIR` must be empty before running the full pipeline to prevent accidental overwrites. If you need to run multiple conversions, set a different `OUTPUT_DIR` in `.env` for each run (e.g., `OUTPUT_DIR=output-v2`, `OUTPUT_DIR=results-20260603`).
 
@@ -688,7 +697,7 @@ Terraform Policy Agent runs an AI coding agent inside a container. Be aware of w
 
 ### Resume from Checkpoint
 
-Interrupted runs save progress to `.checkpoint` in `DATA_DIR`. Use `--resume` to pick up from the last completed stage without re-running earlier steps:
+Interrupted runs save progress to `.checkpoint` in `DATA_DIR`. Use `--resume` to pick up from the last completed stage without re-running earlier steps. Snapshots are versioned: a `.checkpoint` written by an older version may contain copied host files (symlinks were followed) and is rejected on resume, as is a missing snapshot. Delete the old `.checkpoint`, and review or delete old `.backup` directories, before starting a fresh run:
 
 ```bash
 ./run.sh --resume local      # local mode
@@ -722,4 +731,4 @@ Both flags can be combined:
 ### Pipeline Fails
 - Check `data/input/policy_goal.txt` exists and is properly formatted
 - Verify binary paths in `.env` are correct
-- Check logs in `data/output/stage*.log`
+- Check logs in `data/.logs/run-*/stage*.log` (private, host-only; the newest `run-*` directory is the latest run)

@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -41,20 +42,78 @@ def parse_env_file(path: Path) -> dict:
     return data
 
 
+def unquote(value: str) -> str:
+    """Strip one layer of matching surrounding quotes (as `source .env` would)."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
 def resolve_path(base: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else (base / path).resolve()
 
 
-def summarize_output(output_dir: Path) -> dict:
+def is_safe_dir(path: Path) -> bool:
+    """Real (non-symlink) directory owned by us and not group/other-writable."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid() and not st.st_mode & 0o022
+
+
+def find_log_dir(data_dir: Path, explicit: Path = None):
+    """Return (private run dir or None, error or None). Default: newest valid run with stage logs;
+    --log-dir selects an exact run-* directory directly under this DATA_DIR/.logs."""
+    root = data_dir / ".logs"
+    if not is_safe_dir(root):
+        return None, f"no safe private log root at {root} (missing, symlink, wrong owner or unsafe permissions)"
+    if explicit is not None:
+        if (not explicit.name.startswith("run-") or not is_safe_dir(explicit.parent)
+                or os.path.realpath(explicit.parent) != os.path.realpath(root)):
+            return None, f"--log-dir must be a run-* directory directly under {root}: {explicit}"
+        if not is_safe_dir(explicit):
+            return None, f"--log-dir is not a real directory owned by you with safe permissions: {explicit}"
+        if not stage_logs(explicit, "stage*.log"):
+            return None, f"--log-dir contains no regular stage*.log files: {explicit}"
+        return explicit, None
+    runs = []  # (mtime, path); a run removed or made unreadable meanwhile is skipped
+    for p in root.glob("run-*"):
+        if is_safe_dir(p) and stage_logs(p, "stage*.log"):
+            try:
+                runs.append((os.lstat(p).st_mtime, p))
+            except OSError:
+                continue
+    if not runs:
+        return None, f"no valid run-* directories with stage logs under {root}"
+    return max(runs, key=lambda r: r[0])[1], None
+
+
+def stage_logs(log_dir: Path, pattern: str) -> list:
+    """Regular, non-symlink log files only."""
+    found = []
+    for p in log_dir.glob(pattern):
+        try:  # an entry deleted or made unreadable since the glob is simply not a usable log
+            if stat.S_ISREG(os.lstat(p).st_mode):
+                found.append(str(p))
+        except OSError:
+            continue
+    return sorted(found)
+
+
+def summarize_output(output_dir: Path, log_dir: Path = None, log_error: str = None) -> dict:
     summary = {
         "output_dir_exists": output_dir.exists(),
         "summary_md_exists": (output_dir / "summary.md").exists(),
         "summary_json_exists": (output_dir / "summary.json").exists(),
-        "stage0_log_exists": (output_dir / "stage0_extraction.log").exists(),
-        "stage3_log_exists": (output_dir / "stage3_summary.log").exists(),
-        "goal_stage1_logs": sorted(str(p) for p in output_dir.glob("goals/*_stage1*.log")),
-        "policy_stage2_logs": sorted(str(p) for p in output_dir.glob("*/stage2_generation*.log")),
+        "log_dir": str(log_dir) if log_dir else None,
+        "log_error": log_error,
+        "stage0_log_exists": False,
+        "stage3_log_exists": False,
+        "goal_stage1_logs": [],
+        "policy_stage2_logs": [],
+        "policy_stage4_logs": [],
         "policy_dirs": sorted(
             p.name for p in output_dir.iterdir()
             if p.is_dir() and p.name != "goals"
@@ -62,16 +121,21 @@ def summarize_output(output_dir: Path) -> dict:
         "error_hits": [],
     }
 
-    patterns = ["ERROR", "Error", "failed", "timed out", "Traceback"]
     candidate_logs = []
-    if output_dir.exists():
-        candidate_logs.extend(output_dir.glob("stage*.log"))
-        candidate_logs.extend(output_dir.glob("goals/*.log"))
-        candidate_logs.extend(output_dir.glob("*/stage2_generation*.log"))
+    if log_dir:
+        summary["stage0_log_exists"] = bool(stage_logs(log_dir, "stage0.log"))
+        summary["stage3_log_exists"] = bool(stage_logs(log_dir, "stage3*.log"))
+        summary["goal_stage1_logs"] = stage_logs(log_dir, "stage1_*.log")
+        summary["policy_stage2_logs"] = stage_logs(log_dir, "stage2_*.log")
+        summary["policy_stage4_logs"] = stage_logs(log_dir, "stage4_*.log")
+        candidate_logs = (stage_logs(log_dir, "stage0*.log") + stage_logs(log_dir, "stage3*.log")
+                          + summary["goal_stage1_logs"] + summary["policy_stage2_logs"]
+                          + summary["policy_stage4_logs"])
 
+    patterns = ["ERROR", "Error", "failed", "timed out", "Traceback"]
     for log_file in candidate_logs:
         try:
-            text = log_file.read_text(encoding="utf-8", errors="ignore")
+            text = Path(log_file).read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
         for pattern in patterns:
@@ -96,20 +160,27 @@ def main() -> int:
         metavar="PATH",
         help="Summarize pipeline output in this path."
     )
+    parser.add_argument(
+        "--log-dir",
+        default=None,
+        help="Exact private run directory directly under the selected DATA_DIR/.logs. Default: newest valid run, "
+             "which may be a later --step run."
+    )
     args = parser.parse_args()
 
     repo_root = Path.cwd()
     env_path = repo_root / ".env"
     env = parse_env_file(env_path) if env_path.exists() else {}
-    data_dir = resolve_path(repo_root, env.get("DATA_DIR", "./data"))
+    data_dir = resolve_path(repo_root, os.environ.get("DATA_DIR") or unquote(env.get("DATA_DIR", "")) or "./data")
 
     if args.path:
         output_dir = data_dir / args.path
     else:
-        output_dir = data_dir / env.get("OUTPUT_DIR", "output")
+        output_dir = data_dir / (os.environ.get("OUTPUT_DIR") or unquote(env.get("OUTPUT_DIR", "")) or "output")
     
-    print(json.dumps(summarize_output(output_dir), indent=2))
-    return 0
+    log_dir, log_error = find_log_dir(data_dir, Path(os.path.abspath(args.log_dir)) if args.log_dir else None)
+    print(json.dumps(summarize_output(output_dir, log_dir, log_error), indent=2))
+    return 0 if log_dir else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

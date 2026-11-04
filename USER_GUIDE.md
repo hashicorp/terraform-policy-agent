@@ -510,7 +510,7 @@ If you interrupted `tfpac-setup` or `tfpac-run` mid-way, simply run the skill ag
 
 If you encounter issues not covered here:
 
-1. **Check logs:** Review stage logs in `data/output/stage*.log`
+1. **Check logs:** Review stage logs in `data/.logs/run-*/stage*.log` (host-only, not in `OUTPUT_DIR`; `execution_metrics.json` is there too)
 2. **Verify configuration:** Double-check all settings in `.env`
 3. **See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)** for known error patterns and fixes.
 
