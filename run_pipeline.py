@@ -509,7 +509,7 @@ class PipelineExecutor:
         if self._unsafe_cleanup:
             raise RuntimeError(
                 "A container could not be confirmed removed; refusing to copy or checkpoint output. "
-                "Remove it manually (docker rm -f) and re-run.")
+                f"Remove it manually ({self.docker_cli} rm -f <container>) and re-run.")
 
     def _abort_run(self, process, container_name: str) -> None:
         """After an abnormal error: stop the wrapper, always confirm the container is gone."""
@@ -686,14 +686,15 @@ class PipelineExecutor:
                         pass
                     if process.stdout:
                         process.stdout.close()
-                    try:
-                        subprocess.run(
-                            [self.docker_cli, "stop", container_name],
-                            timeout=5,
-                            capture_output=True
-                        )
-                    except Exception as e:
-                        print(f"Warning: Failed to stop container: {e}")
+                    if group_ok:
+                        try:
+                            subprocess.run(
+                                [self.docker_cli, "stop", container_name],
+                                timeout=5,
+                                capture_output=True
+                            )
+                        except Exception as e:
+                            print(f"Warning: Failed to stop container: {e}")
                     
                     # Confirm no container writer survives (also clears tracking)
                     if group_ok:

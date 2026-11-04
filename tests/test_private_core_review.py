@@ -313,6 +313,21 @@ class Lifecycle(LifecycleBase):
                                side_effect=AssertionError("no new job")):
             self.assertFalse(self.r._run_docker_command("s", "p", "Stage 2"))
 
+    def test_timeout_failed_group_cleanup_makes_no_engine_call(self):
+        self.wrapper("sleep 30\n")
+        self.r._TERM_GRACE = self.r._KILL_GRACE = 0.05
+        with mock.patch.object(self.r, "_group_alive", return_value=True):
+            self.assertFalse(self.go(timeout=0.2))
+        self.assertEqual(self.events, [])  # no stop/rm/ps against the engine
+        self.assertTrue(self.r._unsafe_cleanup)
+        self.assertIn(self.r.container_prefix, self.r.running_containers)
+
+    def test_unsafe_cleanup_message_names_configured_cli(self):
+        self.r.docker_cli = "podman"
+        self.r._unsafe_cleanup = True
+        with self.assertRaisesRegex(RuntimeError, r"podman rm -f <container>"):
+            self.r._require_safe_cleanup()
+
     def test_popen_failure_not_tracked_and_container_untracked(self):
         with mock.patch.object(run_pipeline.subprocess, "Popen", side_effect=OSError("x")), \
                 self.engine(), mock.patch("builtins.print"):
