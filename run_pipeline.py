@@ -38,6 +38,7 @@ import json
 import logging
 import stat
 import tempfile
+import threading
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -76,6 +77,39 @@ def create_private_run_dir(data_dir: Path) -> Path:
     return Path(tempfile.mkdtemp(prefix="run-", dir=root))
 
 
+def validate_path_below_data(path, data_dir) -> Path:
+    """Lexically validate path is below trusted data_dir; never resolves symlinks.
+
+    Raises ValueError on escape, '..' components, or a symlink / non-directory existing
+    component below data_dir (leaf symlink too). Missing suffix is allowed. data_dir and its
+    ancestors are trusted. Existing leaf regular files are returned for the caller to judge.
+    """
+    p = Path(path)
+    d = Path(os.path.abspath(data_dir))
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    dp, pp = d.parts, p.parts
+    if pp[:len(dp)] != dp:
+        if ".." in pp:
+            raise ValueError(f"Refusing path with '..': {path}")
+        raise ValueError(f"Path escapes DATA_DIR: {path}")
+    rel = pp[len(dp):]
+    if ".." in rel:
+        raise ValueError(f"Refusing path with '..': {path}")
+    cur = d
+    for i, part in enumerate(rel):
+        cur = cur / part
+        try:
+            mode = os.lstat(cur).st_mode
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"Refusing symlink below DATA_DIR: {cur}")
+        if i < len(rel) - 1 and not stat.S_ISDIR(mode):
+            raise ValueError(f"Refusing non-directory below DATA_DIR: {cur}")
+    return d.joinpath(*rel)
+
+
 SNAPSHOT_VERSION = 2
 
 
@@ -83,11 +117,14 @@ def _raise_walk_error(err: OSError) -> None:
     raise err
 
 
-def safe_copy_tree(src, dst, omit_terraform: bool = False) -> None:
+def safe_copy_tree(src, dst, omit_terraform: bool = False, data_dir=None) -> None:
     """Copy a tree, refusing symlinks and special files; links are never dereferenced.
 
     The scan plus copytree(symlinks=True) assumes nothing writes to src meanwhile.
     """
+    if data_dir is not None:  # refuse symlinked ancestors of src/dst below DATA_DIR
+        src = validate_path_below_data(src, data_dir)
+        dst = validate_path_below_data(dst, data_dir)
     src = str(src)
     if os.path.islink(src):
         raise ValueError(f"Refusing to copy symlinked directory: {src}")
@@ -116,11 +153,8 @@ class PipelineExecutor:
         
         # Get DATA_DIR from environment, default to ./data
         data_dir_str = os.getenv("DATA_DIR", "./data")
-        if os.path.isabs(data_dir_str):
-            self.data_dir = Path(data_dir_str)
-        else:
-            # Relative path - resolve from current working directory
-            self.data_dir = Path.cwd() / data_dir_str
+        # Lexical normalization only (relative paths resolve from cwd); symlinks are kept
+        self.data_dir = Path(os.path.abspath(data_dir_str))
         
         # Get INPUT_DIR from environment, default to input
         input_dir_name = os.getenv("INPUT_DIR", "input")
@@ -177,6 +211,11 @@ class PipelineExecutor:
         self.running_containers: Set[str] = set()
         # Set when a container could not be confirmed removed; blocks all host copying.
         self._unsafe_cleanup = False
+        self._groups: Set[int] = set()  # process groups of live wrappers (start_new_session)
+        self._groups_lock = threading.RLock()  # signal handler may re-enter while held
+        self._stopping = False  # set by the signal handler: no new jobs
+        self._launching = False  # main thread is inside Popen: handler defers its exit
+        self._deferred_exit = False  # handler deferred; the launcher exits 1 once the group exists
         self.cleanup_registered = False
         
         # Validate environment
@@ -221,13 +260,17 @@ class PipelineExecutor:
                         import datetime
                         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                         backup_dir = self.data_dir / ".backup" / f"output_{timestamp}"
+                        if self.data_dir.joinpath(".backup").is_symlink():
+                            raise RuntimeError("Refusing to back up into a symlinked .backup")
+                        validate_path_below_data(backup_dir.parent, self.data_dir)
                         backup_dir.parent.mkdir(parents=True, exist_ok=True)
-                        safe_copy_tree(self.output_dir, backup_dir)
+                        safe_copy_tree(self.output_dir, backup_dir, data_dir=self.data_dir)
                         print(f"✅ Backed up to: {backup_dir}")
                         break
                     elif choice == "2":
                         if self.output_dir.is_symlink():
                             raise RuntimeError(f"Refusing to clean symlinked OUTPUT_DIR: {self.output_dir}")
+                        validate_path_below_data(self.output_dir, self.data_dir)
                         shutil.rmtree(self.output_dir)
                         print(f"🧹 Cleaned: {self.output_dir}")
                         break
@@ -251,6 +294,11 @@ class PipelineExecutor:
             atexit.register(self._cleanup_containers)
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
+            # wrappers run in their own sessions, so terminal hangup/quit must be forwarded too
+            # (SIGKILL / power loss cannot be handled; a later run must not assume cleanup)
+            for name in ("SIGHUP", "SIGQUIT"):
+                if hasattr(signal, name):
+                    signal.signal(getattr(signal, name), self._signal_handler)
             self.cleanup_registered = True
     
     def _check_log_root_not_overlapping_output(self):
@@ -260,6 +308,16 @@ class PipelineExecutor:
             raise ValueError(
                 f"OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: {os.getenv('OUTPUT_DIR')}"
             )
+        if ".." in Path(os.getenv("OUTPUT_DIR", "output")).parts:
+            raise ValueError(f"OUTPUT_DIR must not contain '..': {os.getenv('OUTPUT_DIR')}")
+        skills_env = os.getenv("LOCAL_SKILLS_DIR")
+        if skills_env:  # any configured skills path (even missing) must be disjoint from output
+            outs = {os.path.abspath(self.output_dir), os.path.realpath(self.output_dir)}
+            sks = {os.path.abspath(skills_env), os.path.realpath(skills_env)}
+            if any(paths_overlap(o, k) for o in outs for k in sks):
+                raise ValueError(
+                    f"LOCAL_SKILLS_DIR ({skills_env}) overlaps OUTPUT_DIR ({self.output_dir}); "
+                    "the skills mount and output must be disjoint")
         for name in (".checkpoint", ".backup"):
             if (self.data_dir / name).is_symlink():
                 raise ValueError(f"Refusing symlinked private directory: {self.data_dir / name}")
@@ -310,14 +368,92 @@ class PipelineExecutor:
                        stage, stage)
         return {k: 0 for k in self._TOKEN_KEYS}
 
+    _TERM_GRACE = 3.0   # seconds after SIGTERM before SIGKILL
+    _KILL_GRACE = 5.0   # seconds after SIGKILL before declaring failure
+
+    def _track_group(self, process) -> Optional[int]:
+        """Record the wrapper's process group (its pid, via start_new_session)."""
+        pid = getattr(process, "pid", None)
+        if not isinstance(pid, int) or pid <= 1 or pid == os.getpgrp():
+            return None
+        try:
+            if os.getpgid(pid) != pid:
+                return None
+        except ProcessLookupError:
+            pass  # already exited; its group may still hold descendants
+        with self._groups_lock:
+            self._groups.add(pid)
+        return pid
+
+    @staticmethod
+    def _group_alive(pgid: int) -> bool:
+        """True if the group has a non-zombie member (fails closed if undeterminable)."""
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass  # macOS reports EPERM for zombie-only groups; consult ps
+        try:
+            r = subprocess.run(["ps", "-A", "-o", "pgid=,stat="],
+                               capture_output=True, text=True, timeout=10)
+        except Exception:
+            return True
+        if r.returncode != 0:
+            return True
+        for line in r.stdout.splitlines():
+            f = line.split()
+            if len(f) >= 2 and f[0] == str(pgid) and not f[1].startswith("Z"):
+                return True
+        return False
+
+    def _stop_group(self, pgid: Optional[int]) -> Tuple[bool, bool]:
+        """SIGTERM then SIGKILL a group. Returns (had_live_members, confirmed_gone)."""
+        if pgid is None:
+            return False, True
+        if not self._group_alive(pgid):
+            with self._groups_lock:
+                self._groups.discard(pgid)
+            return False, True
+        for sig, grace in ((signal.SIGTERM, self._TERM_GRACE), (signal.SIGKILL, self._KILL_GRACE)):
+            try:
+                os.killpg(pgid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+            deadline = time.monotonic() + grace
+            while True:
+                if not self._group_alive(pgid):
+                    with self._groups_lock:
+                        self._groups.discard(pgid)
+                    return True, True
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        self._unsafe_cleanup = True
+        logger.error("could not stop process group %s; host output will not be copied or "
+                     "checkpointed", pgid)
+        return True, False
+
+    def _stop_all_groups(self) -> bool:
+        with self._groups_lock:
+            groups = list(self._groups)
+        return all([self._stop_group(g)[1] for g in groups])
+
     def _signal_handler(self, signum, frame):
         """Handle interrupt signals (Ctrl+C)"""
+        self._stopping = True
+        if self._launching:
+            # Handlers run on the main thread. A wrapper being created is not registered yet, so
+            # exiting here would orphan it: _run_docker_command aborts it and exits 1 instead.
+            self._deferred_exit = True
+            return
         print("\n\n⚠️  Interrupt received! Cleaning up containers...")
         self._cleanup_containers()
         sys.exit(1)
     
     def _cleanup_containers(self):
-        """Stop and remove all running containers"""
+        """Stop wrapper process groups, then stop and remove all running containers"""
+        self._stop_all_groups()
         if not self.running_containers:
             return
         
@@ -380,14 +516,20 @@ class PipelineExecutor:
         if process is None:  # Popen never started, so no container exists
             self.running_containers.discard(container_name)
             return
+        ok = False
         try:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
+            _, ok = self._stop_group(self._track_group(process))
+            try:
+                process.wait(timeout=10)
+            except Exception:
+                pass
             if process.stdout:
                 process.stdout.close()
         finally:
-            self._force_remove_container(container_name)
+            if ok:
+                self._force_remove_container(container_name)
+            else:  # could not establish no live writers: fail closed, leave container tracked
+                self._unsafe_cleanup = True
 
     def _clean_log_line(self, line: str) -> str:
         """
@@ -459,7 +601,7 @@ class PipelineExecutor:
         
         log_handle = None
         process = None
-        if self._unsafe_cleanup:
+        if self._unsafe_cleanup or self._stopping:
             logger.error("[%s] not started: an earlier container could not be confirmed removed", stage_name)
             return False
         try:
@@ -483,19 +625,38 @@ class PipelineExecutor:
             env['SKIP_FAIL_OUTPUT_CLEANUP'] = '1'
             # The orchestrator already writes this stage's private log; stop run.sh from adding a second one
             env['PIPELINE_LOG_CAPTURED'] = '1'
-            
-            # Track this container
-            self.running_containers.add(container_name)
-            
+
             # Run command with streaming output and timeout
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                env=env
-            )
+            self._launching = threading.current_thread() is threading.main_thread()
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                    start_new_session=True
+                )
+            except Exception:
+                if self._deferred_exit:
+                    raise SystemExit(1)  # handled below: nothing was created, exit as the handler would
+                raise
+            finally:
+                self._launching = False
+            pgid = self._track_group(process)
+            # Only now can the handler stop the wrapper, so only now may it touch the engine
+            self.running_containers.add(container_name)
+            if self._deferred_exit:
+                self._cleanup_containers()  # group (now registered) first, then the engine
+                raise SystemExit(1)  # handled below: aborts this wrapper, re-raises
+            if self._stopping:
+                # Shutdown began before this group was registered, so the handler could not
+                # see it: stop it here, then confirm the container is gone.
+                if log_handle and not log_handle.closed:
+                    log_handle.close()
+                self._abort_run(process, container_name)
+                return False
             
             # Stream output to both console and log file with timeout
             start_time = time.time()
@@ -517,7 +678,14 @@ class PipelineExecutor:
                     # Timeout exceeded - stop the container
                     print(f"\n⏱️  Timeout reached, stopping container: {container_name}")
 
-                    # Stop the container
+                    # Stop the wrapper's process group first so no descendant can recreate it
+                    _, group_ok = self._stop_group(pgid)
+                    try:
+                        process.wait(timeout=10)
+                    except Exception:
+                        pass
+                    if process.stdout:
+                        process.stdout.close()
                     try:
                         subprocess.run(
                             [self.docker_cli, "stop", container_name],
@@ -527,18 +695,9 @@ class PipelineExecutor:
                     except Exception as e:
                         print(f"Warning: Failed to stop container: {e}")
                     
-                    # Kill the run.sh process
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                    
-                    if process.stdout:
-                        process.stdout.close()
                     # Confirm no container writer survives (also clears tracking)
-                    self._force_remove_container(container_name)
+                    if group_ok:
+                        self._force_remove_container(container_name)
                     
                     timeout_msg = f"\n❌ {stage_name} timed out after {timeout_seconds} seconds ({timeout_seconds/60:.1f} minutes)\n"
                     print(timeout_msg)
@@ -556,6 +715,8 @@ class PipelineExecutor:
 
                 # Check if process has finished
                 if process.poll() is not None:
+                    # Wrapper exited: descendants may still hold the pipe or write output
+                    survivors, group_ok = self._stop_group(pgid)
                     # Read any remaining output
                     if process.stdout:
                         remaining = process.stdout.read()
@@ -601,14 +762,16 @@ class PipelineExecutor:
                 log_handle.write(f"Execution time: {time.time() - start_time:.2f} seconds\n")
                 log_handle.close()
             
-            if return_code != 0:
+            if not group_ok:
+                pass  # container stays tracked and unsafe; no engine claim of absence
+            elif return_code != 0 or survivors:
                 self._force_remove_container(container_name)
             else:
                 self.running_containers.discard(container_name)
             
             # Print completion message to console
             elapsed = time.time() - start_time
-            if return_code != 0:
+            if return_code != 0 or survivors or not group_ok:
                 print(f"[{stage_name}] Failed ({elapsed:.1f}s) ✗")
                 if log_file:
                     print(f"  Log: {log_file}")
@@ -626,6 +789,13 @@ class PipelineExecutor:
                 log_handle.close()
             self._abort_run(process, container_name)
             return False
+        except (KeyboardInterrupt, SystemExit):
+            # e.g. the signal handler fired between Popen and group registration:
+            # stop the wrapper we created (group first, engine after), then re-raise.
+            if log_handle and not log_handle.closed:
+                log_handle.close()
+            self._abort_run(process, container_name)
+            raise
         except Exception as e:
             error_msg = f"\n❌ {stage_name} failed with error: {e}\n"
             print(error_msg)
@@ -1565,23 +1735,17 @@ class PipelineExecutor:
         cp_dir = self._checkpoint_dir()
         if cp_dir.is_symlink():
             raise RuntimeError(f"Refusing symlinked checkpoint directory: {cp_dir}")
+        validate_path_below_data(cp_dir, self.data_dir)
+        validate_path_below_data(self.output_dir, self.data_dir)
         cp_dir.mkdir(parents=True, exist_ok=True)
         snapshot = self._stage_snapshot_dir(stage)
         # Private temp dir: a failed copy leaves the previous snapshot and JSON untouched
         tmp = Path(tempfile.mkdtemp(prefix=f".stage{stage}-", dir=cp_dir))
+        keep_tmp = False
         try:
             new_snap = tmp / "snapshot"
-            safe_copy_tree(self.output_dir, new_snap, omit_terraform=True)
-            old = tmp / "old"
-            had_old = os.path.lexists(snapshot)
-            if had_old:
-                os.rename(snapshot, old)
-            try:
-                os.rename(new_snap, snapshot)
-            except BaseException:
-                if had_old:
-                    os.rename(old, snapshot)
-                raise
+            safe_copy_tree(self.output_dir, new_snap, omit_terraform=True, data_dir=self.data_dir)
+            # Fully prepare metadata before touching the old snapshot
             data = self._load_checkpoint()
             data[f"stage{stage}_done"] = True
             data[f"stage{stage}_snapshot_version"] = SNAPSHOT_VERSION
@@ -1593,9 +1757,29 @@ class PipelineExecutor:
             fd, meta_tmp = tempfile.mkstemp(prefix=".checkpoint-", suffix=".json", dir=tmp)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
-            os.replace(meta_tmp, self._checkpoint_path())
+            old = tmp / "old"
+            had_old = os.path.lexists(snapshot)
+            try:
+                if had_old:
+                    os.rename(snapshot, old)
+                os.rename(new_snap, snapshot)
+                os.replace(meta_tmp, self._checkpoint_path())
+            except BaseException:
+                # Decide from the filesystem, not from which call returned: an interrupt can land
+                # right after a syscall. meta_tmp gone means the JSON is committed: keep the new pair.
+                if os.path.lexists(meta_tmp):
+                    try:  # roll back: drop the new snapshot if installed, restore the old one
+                        if not os.path.lexists(new_snap) and os.path.lexists(snapshot):
+                            os.rename(snapshot, tmp / "failed")
+                        if had_old and os.path.lexists(old):
+                            os.rename(old, snapshot)
+                    except BaseException:
+                        keep_tmp = True  # rollback artifacts hold the only copy of the old snapshot
+                        logger.error("checkpoint rollback failed; previous snapshot kept in %s", tmp)
+                raise
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if not keep_tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     def _restore_checkpoint(self, stage: int) -> None:
         """Restore output_dir from .checkpoint/stage{N}/; fail closed on anything unexpected."""
@@ -1610,11 +1794,13 @@ class PipelineExecutor:
             raise RuntimeError(f"Checkpoint snapshot missing or unsafe: {snapshot}")
         if self.output_dir.is_symlink():
             raise RuntimeError(f"Refusing to restore over symlinked OUTPUT_DIR: {self.output_dir}")
+        validate_path_below_data(self._checkpoint_dir(), self.data_dir)
+        validate_path_below_data(self.output_dir, self.data_dir)
         # Validate the whole snapshot (copy to a scratch dir) before wiping the output
         scratch = Path(tempfile.mkdtemp(prefix=".restore-", dir=self._checkpoint_dir()))
         try:
             staged = scratch / "out"
-            safe_copy_tree(snapshot, staged)
+            safe_copy_tree(snapshot, staged, data_dir=self.data_dir)
             if self.output_dir.exists():
                 shutil.rmtree(self.output_dir)
             self.output_dir.parent.mkdir(parents=True, exist_ok=True)

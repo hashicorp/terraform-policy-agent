@@ -49,12 +49,72 @@ for name in (".logs", ".checkpoint", ".backup"):
 PY
 }
 
+# Normalize OUTPUT_DIR lexically (no realpath, so symlink evidence survives):
+# drops empty and "." components and trailing slashes, rejects "..".
+# Prints the relative path ("." if nothing is left). Absolute paths are the caller's check.
+# Usage: normalize_output_dir <output_dir>
+normalize_output_dir() {
+    local part out="" IFS=/
+    local -a parts
+    read -r -a parts <<< "$1"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "$part" in
+            ""|.) ;;
+            ..) echo "ERROR: OUTPUT_DIR must not contain '..': $1" >&2; return 1 ;;
+            *) out="${out:+${out}/}${part}" ;;
+        esac
+    done
+    echo "${out:-.}"
+}
+
+# Fail if LOCAL_SKILLS_DIR and the output directory contain one another, either
+# way, lexically or after resolving existing links, ignoring case. The skills
+# mount is writable, so such an overlap would let the container replace output.
+# Usage: assert_skills_not_overlapping_output <output_dir_host> <skills_dir>
+assert_skills_not_overlapping_output() {
+    python3 - "$1" "$2" <<'PY' || exit 1
+import os, sys
+from pathlib import Path
+out, skills = sys.argv[1:3]
+def parts(p):
+    return tuple(c.casefold() for c in Path(p).parts)
+outs = {parts(os.path.abspath(out)), parts(os.path.realpath(out))}
+sks = {parts(os.path.abspath(skills)), parts(os.path.realpath(skills))}
+for a in outs:
+    for b in sks:
+        if a[:len(b)] == b or b[:len(a)] == a:
+            print(f"ERROR: LOCAL_SKILLS_DIR ({skills}) overlaps OUTPUT_DIR ({out}). "
+                  "The writable skills mount could replace the output directory.", file=sys.stderr)
+            sys.exit(1)
+PY
+}
+
+# Refuse a path (given lexically) with '..', a symlink component below
+# data_dir, or a non-directory ancestor. Uses run_pipeline.validate_path_below_data.
+# Usage: assert_path_below_data <path> <data_dir>
+assert_path_below_data() {
+    python3 - "$(dirname "${BASH_SOURCE[0]}")" "$1" "$2" <<'PY' || return 1
+import sys
+sys.path.insert(0, sys.argv[1])
+from run_pipeline import validate_path_below_data
+try:
+    validate_path_below_data(sys.argv[2], sys.argv[3])
+except ValueError as e:
+    sys.exit(f"ERROR: refusing unsafe path {sys.argv[2]}: {e}")
+PY
+}
+
 # Back up a host output directory without following symlinks: refuse if it
 # contains any link (copying would otherwise read host files into the backup),
 # then copy with -P. Assumes no container is writing to the directory.
-# Usage: backup_output_dir <src> <dest>
+# With <data_dir>, src and dest must also be lexically clean and free of
+# symlink components below data_dir (checked before anything is scanned/copied).
+# Usage: backup_output_dir <src> <dest> [data_dir]
 backup_output_dir() {
-    local src="$1" dest="$2" links
+    local src="$1" dest="$2" data_dir="${3:-}" links
+    if [ -n "$data_dir" ]; then
+        assert_path_below_data "$src" "$data_dir" && assert_path_below_data "$dest" "$data_dir" || return 1
+    fi
     if [ -L "$src" ] || [ -L "$(dirname "$dest")" ]; then
         echo "ERROR: refusing to back up through a symlink: ${src}" >&2
         return 1

@@ -315,22 +315,27 @@ class TimeoutCleanup(CopyBase):
             self.assertFalse(self.ex._run_docker_command("s", "p", "Stage X", timeout_seconds=600))
         self.assertTrue(self.ex._unsafe_cleanup)
 
-    def test_kill_or_stdout_close_failure_still_attempts_removal(self):
-        for attr in ("kill", "close"):
-            with self.subTest(attr):
-                self.ex._unsafe_cleanup = False
-                self.ex.running_containers.add("c1")
-                proc = mock.Mock()
-                proc.poll.return_value = None
-                if attr == "kill":
-                    proc.kill.side_effect = OSError("kill")
-                else:
-                    proc.stdout.close.side_effect = OSError("close")
-                with self.fake(lambda c: cp(c, 1), lambda c: cp(c, 0, b"live")), \
-                     self.assertLogs("run_pipeline", "ERROR"), self.assertRaises(OSError):
-                    self.ex._abort_run(proc, "c1")
-                self.assertTrue(any(c[1] == "rm" for c in self.calls))
-                self.assertTrue(self.ex._unsafe_cleanup)
+    def test_stdout_close_failure_still_attempts_removal(self):
+        self.ex.running_containers.add("c1")
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        proc.stdout.close.side_effect = OSError("close")
+        with self.fake(lambda c: cp(c, 1), lambda c: cp(c, 0, b"live")), \
+             self.assertLogs("run_pipeline", "ERROR"), self.assertRaises(OSError):
+            self.ex._abort_run(proc, "c1")
+        self.assertTrue(any(c[1] == "rm" for c in self.calls))
+        self.assertTrue(self.ex._unsafe_cleanup)
+
+    def test_group_stop_failure_blocks_engine_removal(self):
+        # the wrapper is stopped by process group (no process.kill); failure fails closed
+        self.ex.running_containers.add("c1")
+        proc = mock.Mock()
+        proc.pid = 1
+        with mock.patch.object(self.ex, "_stop_group", side_effect=OSError("kill")), \
+             self.fake(lambda c: cp(c, 0)), self.assertRaises(OSError):
+            self.ex._abort_run(proc, "c1")
+        self.assertFalse(any(c[1] == "rm" for c in self.calls))
+        self.assertTrue(self.ex._unsafe_cleanup)
 
     def test_abort_without_process_just_untracks(self):
         self.ex.running_containers.add("c1")

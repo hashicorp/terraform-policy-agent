@@ -517,11 +517,22 @@ fi
 
 # Resolve DATA_DIR path (handle both absolute and relative paths)
 DATA_DIR_RESOLVED=$(resolve_path "$DATA_DIR" "directory")
+if [ -z "$DATA_DIR_RESOLVED" ]; then
+    echo "ERROR: DATA_DIR not found: ${DATA_DIR}" >&2
+    exit 1
+fi
+# Lexical normalization only (drops '..'); links stay so path checks can see them.
+DATA_DIR_RESOLVED=$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$DATA_DIR_RESOLVED") || exit 1
 
 # OUTPUT_DIR must be relative to DATA_DIR.
 if [[ "$OUTPUT_DIR" = /* ]]; then
     echo "ERROR: OUTPUT_DIR must be relative to DATA_DIR, not an absolute path: ${OUTPUT_DIR}" >&2
     exit 1
+fi
+OUTPUT_DIR=$(normalize_output_dir "$OUTPUT_DIR") || exit 1
+# Checked even when the path is missing: creating the output below could create it.
+if [ -n "${LOCAL_SKILLS_DIR:-}" ]; then
+    assert_skills_not_overlapping_output "${DATA_DIR_RESOLVED}/${OUTPUT_DIR}" "$LOCAL_SKILLS_DIR"
 fi
 assert_not_overlapping_private_logs "$DATA_DIR_RESOLVED" "OUTPUT_DIR mount" "${DATA_DIR_RESOLVED}/${OUTPUT_DIR}"
 
@@ -549,7 +560,7 @@ if [ "$SKILL" = "step0-extraction" ] && [ "${SKIP_OUTPUT_DIR_CHECK:-}" != "1" ] 
                 1)
                     _TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
                     _BACKUP_DIR="${DATA_DIR_RESOLVED}/.backup/output_${_TIMESTAMP}"
-                    backup_output_dir "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}" || exit 1
+                    backup_output_dir "${OUTPUT_DIR_HOST}" "${_BACKUP_DIR}" "${DATA_DIR_RESOLVED}" || exit 1
                     echo "✅ Backed up to: ${_BACKUP_DIR}"
                     break
                     ;;
@@ -685,7 +696,8 @@ esac
 # Collapse newlines / repeated whitespace in the prompt into single spaces so it is
 # passed to `opencode run` as one line (this matches the behaviour of the previous
 # eval-based implementation, which word-split the command string).
-PROMPT_ONE_LINE="$(set -f; echo ${PROMPT})"
+# printf (not echo) so a prompt starting with -n, -e or -E is not parsed as echo options.
+PROMPT_ONE_LINE="$(set -f; set -- ${PROMPT}; printf '%s' "$*")"
 
 CONTAINER_SCRIPT="opencode run '/${SKILL} ${PROMPT_ONE_LINE}' && echo '' && echo '==========================================' && echo '✅ Usage Statistics (opencode stats)' && echo '==========================================' && opencode stats"
 DOCKER_ARGS+=("${IMAGE_NAME}:${IMAGE_TAG}" sh -c "${CONTAINER_SCRIPT}")
@@ -719,11 +731,11 @@ fi
 STEP_LOG=""
 if [ "${PIPELINE_LOG_CAPTURED:-}" != "1" ]; then
     case "$SKILL" in
-        step0-extraction)          _STEP_LOG_NAME="stage0" ;;
-        step1-requirement)         _STEP_LOG_NAME="stage1_0001" ;;
-        step2-generation)          _STEP_LOG_NAME="stage2_0001" ;;
-        step3-summary)             _STEP_LOG_NAME="stage3" ;;
-        step4-validation-fixtures) _STEP_LOG_NAME="stage4_0001" ;;
+        step0-extraction)          _STEP_LOG_NAME="stage0"; _STEP_HEADER="Stage 0: Policy Extraction" ;;
+        step1-requirement)         _STEP_LOG_NAME="stage1_0001"; _goal="${GOAL_FILE##*/}"; _STEP_HEADER="Stage 1: Requirement (${_goal%.*})" ;;
+        step2-generation)          _STEP_LOG_NAME="stage2_0001"; _STEP_HEADER="Stage 2: Generation (${POLICY_DIR})" ;;
+        step3-summary)             _STEP_LOG_NAME="stage3"; _STEP_HEADER="Stage 3: Summary Generation" ;;
+        step4-validation-fixtures) _STEP_LOG_NAME="stage4_0001"; _STEP_HEADER="Stage 4: Fixtures (${POLICY_DIR})" ;;
     esac
     if ! STEP_LOG_DIR=$(python3 -c '
 import sys
@@ -739,7 +751,11 @@ except (ValueError, OSError) as e:
     fi
     STEP_LOG="${STEP_LOG_DIR}/${_STEP_LOG_NAME}.log"
     {
-        echo "${SKILL} (direct step run)"
+        echo "================================================================================"
+        echo "${_STEP_HEADER}"
+        echo "================================================================================"
+        echo "Direct step: ${SKILL}"
+        echo "================================================================================"
         echo "Started at: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "Container: ${CONTAINER_NAME}"
         echo ""

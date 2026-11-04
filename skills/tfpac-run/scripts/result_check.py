@@ -42,6 +42,13 @@ def parse_env_file(path: Path) -> dict:
     return data
 
 
+def unquote(value: str) -> str:
+    """Strip one layer of matching surrounding quotes (as `source .env` would)."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
 def resolve_path(base: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else (base / path).resolve()
@@ -154,12 +161,12 @@ def main() -> int:
     repo_root = Path.cwd()
     env_path = repo_root / ".env"
     env = parse_env_file(env_path) if env_path.exists() else {}
-    data_dir = resolve_path(repo_root, env.get("DATA_DIR", "./data"))
+    data_dir = resolve_path(repo_root, os.environ.get("DATA_DIR") or unquote(env.get("DATA_DIR", "")) or "./data")
 
     if args.path:
         output_dir = data_dir / args.path
     else:
-        output_dir = data_dir / env.get("OUTPUT_DIR", "output")
+        output_dir = data_dir / (os.environ.get("OUTPUT_DIR") or unquote(env.get("OUTPUT_DIR", "")) or "output")
     
     log_dir, log_error = find_log_dir(data_dir, Path(os.path.abspath(args.log_dir)) if args.log_dir else None)
     print(json.dumps(summarize_output(output_dir, log_dir, log_error), indent=2))
