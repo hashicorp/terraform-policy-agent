@@ -190,6 +190,15 @@ class PrivateRootOverlap(Base):
                 with self.env(LOCAL_SKILLS_DIR=str(d)), self.assertRaises(ValueError, msg=str(d)):
                     self.make()
 
+    def test_missing_skills_path_overlapping_private_roots_rejected_before_mkdir(self):
+        link = self.tmp / "alias"; link.symlink_to(self.data / ".logs")  # dangling, outside data
+        for skills in (self.data / ".logs", self.data / ".logs/run-x", self.data / ".LOGS", self.data / ".checkpoint",
+                       self.data / ".backup/x", link):
+            with self.subTest(skills=str(skills)), self.env(LOCAL_SKILLS_DIR=str(skills)):
+                with self.assertRaises(ValueError):
+                    self.make()
+                self.assertFalse((self.data / ".logs").exists() or (self.data / "input").exists())
+
     def test_overlap_checked_before_interactive_backup(self):
         out = self.data / ".backup"; out.mkdir(parents=True); (out / "x").write_text("x")
         with self.env(OUTPUT_DIR=".backup"), mock.patch.object(sys, "argv", ["run_pipeline.py"]), \

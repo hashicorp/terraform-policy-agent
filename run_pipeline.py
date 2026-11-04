@@ -323,13 +323,13 @@ class PipelineExecutor:
                 raise ValueError(f"Refusing symlinked private directory: {self.data_dir / name}")
         private_roots = [Path(os.path.realpath(self.data_dir / n)) for n in (".logs", ".checkpoint", ".backup")]
         mounts = [("OUTPUT_DIR", self.output_dir)]
-        skills = os.getenv("LOCAL_SKILLS_DIR")
-        if skills and os.path.isdir(skills):
-            mounts.append(("LOCAL_SKILLS_DIR", Path(skills)))
+        if skills_env:
+            mounts.append(("LOCAL_SKILLS_DIR", Path(skills_env)))
         for label, mount in mounts:
-            m = Path(os.path.realpath(mount))
-            for root in private_roots:
-                if paths_overlap(str(m), str(root)):
+            for m in (os.path.abspath(mount), os.path.realpath(mount)):
+                for root in private_roots:
+                    if not paths_overlap(m, str(root)):
+                        continue
                     raise ValueError(
                         f"{label} ({m}) overlaps the private directory ({root}). "
                         "Choose a path that does not contain or sit inside DATA_DIR/.logs, "
